@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 from google.genai import errors  # noqa: E402
 
 import main  # noqa: E402
-from config import CATEGORIES, MAX_INPUT_CHARS, MAX_STORIES  # noqa: E402
+from config import CATEGORIES, CATEGORY_DEFINITIONS, MAX_INPUT_CHARS, MAX_STORIES  # noqa: E402
 from fetch import Newsletter  # noqa: E402
 from links import Link, filter_links  # noqa: E402
 from summarize import (  # noqa: E402
@@ -27,11 +27,11 @@ GOOD = Link("Read the launch post", "https://example.com/launch")
 GOOD2 = Link("Funding round details", "https://example.com/funding")
 
 
-def reply(category: str = "AI & Tech", stories: list | None = None) -> str:
+def reply(stories: list | None = None, skip: bool = False) -> str:
     """Build a JSON reply like the one Gemini should send back."""
     if stories is None:
-        stories = [{"summary": "A thing happened.", "link_id": 1}]
-    return json.dumps({"category": category, "stories": stories})
+        stories = [{"title": "T", "summary": "A thing happened.", "link_id": 1, "category": "AI & Tech"}]
+    return json.dumps({"skip": skip, "stories": stories})
 
 
 class FakeClient:
@@ -94,27 +94,49 @@ class FilterLinksTests(unittest.TestCase):
 
 class ParseReplyTests(unittest.TestCase):
     def test_maps_link_id_to_real_url(self) -> None:
-        result = parse_reply(reply(stories=[{"summary": "S.", "link_id": 2}]), [GOOD, GOOD2])
-        self.assertEqual(result, NewsletterSummary("AI & Tech", [Story("S.", GOOD2.url)]))
+        stories = [{"title": "T", "summary": "S.", "link_id": 2, "category": "AI & Tech"}]
+        result = parse_reply(reply(stories), [GOOD, GOOD2])
+        self.assertEqual(result, NewsletterSummary([Story("T", "S.", GOOD2.url, "AI & Tech")]))
 
     def test_bad_link_ids_become_none(self) -> None:
-        stories = [{"summary": f"S{i}.", "link_id": i} for i in (0, 3, -1)]
-        result = parse_reply(reply(stories=stories), [GOOD, GOOD2])
+        stories = [{"title": "T", "summary": f"S{i}.", "link_id": i, "category": "Other"} for i in (0, 3, -1)]
+        result = parse_reply(reply(stories), [GOOD, GOOD2])
         self.assertEqual([s.url for s in result.stories], [None, None, None])
 
-    def test_unknown_category_becomes_other(self) -> None:
-        self.assertEqual(parse_reply(reply(category="Cooking"), [GOOD]).category, "Other")
+    def test_each_story_keeps_its_own_category(self) -> None:
+        stories = [{"title": "A", "summary": "One.", "link_id": 1, "category": "Personal Growth"},
+                   {"title": "B", "summary": "Two.", "link_id": 1, "category": "Stoicism & Philosophy"}]
+        result = parse_reply(reply(stories), [GOOD])
+        self.assertEqual([s.category for s in result.stories], ["Personal Growth", "Stoicism & Philosophy"])
+
+    def test_unknown_or_missing_story_category_becomes_other(self) -> None:
+        stories = [{"title": "A", "summary": "One.", "link_id": 1, "category": "Cooking"},
+                   {"title": "B", "summary": "Two.", "link_id": 1},
+                   {"title": "C", "summary": "Three.", "link_id": 1, "category": "Skip"}]  # Skip is not a topic
+        result = parse_reply(reply(stories), [GOOD])
+        self.assertEqual([s.category for s in result.stories], ["Other", "Other", "Other"])
+
+    def test_skip_flag_means_no_stories_and_is_not_an_error(self) -> None:
+        result = parse_reply(reply(stories=[], skip=True), [])
+        self.assertEqual(result, NewsletterSummary([], skip=True))
 
     def test_stories_are_capped(self) -> None:
-        stories = [{"summary": f"S{i}.", "link_id": 1} for i in range(9)]
-        self.assertEqual(len(parse_reply(reply(stories=stories), [GOOD]).stories), MAX_STORIES)
+        stories = [{"title": "T", "summary": f"S{i}.", "link_id": 1, "category": "Other"} for i in range(9)]
+        self.assertEqual(len(parse_reply(reply(stories), [GOOD]).stories), MAX_STORIES)
+
+    def test_story_without_title_is_skipped(self) -> None:
+        stories = [{"title": " ", "summary": "No title.", "link_id": 1},
+                   {"summary": "Title missing.", "link_id": 1},
+                   {"title": "Has both", "summary": "Real.", "link_id": 1}]
+        result = parse_reply(reply(stories), [GOOD])
+        self.assertEqual([s.title for s in result.stories], ["Has both"])
 
     def test_blank_stories_are_skipped(self) -> None:
-        stories = [{"summary": "  ", "link_id": 1}, {"summary": "Real.", "link_id": 1}]
-        self.assertEqual(len(parse_reply(reply(stories=stories), [GOOD]).stories), 1)
+        stories = [{"title": "T", "summary": "  ", "link_id": 1}, {"title": "T", "summary": "Real.", "link_id": 1}]
+        self.assertEqual(len(parse_reply(reply(stories), [GOOD]).stories), 1)
 
     def test_garbage_is_an_error(self) -> None:
-        for bad in ("not json", "[]", '{"category": "AI & Tech"}', reply(stories=[])):
+        for bad in ("not json", "[]", '{"skip": false}', '{"stories": []}', reply(stories=[])):
             with self.assertRaises(SummarizeError, msg=bad):
                 parse_reply(bad, [GOOD])
 
@@ -132,9 +154,9 @@ class SummarizeTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_returns_category_and_stories(self) -> None:
-        client = FakeClient(reply(stories=[{"summary": "Launch.", "link_id": 1}]))
+        client = FakeClient(reply([{"title": "T", "summary": "Launch.", "link_id": 1, "category": "AI & Tech"}]))
         result = summarize("Hello world", [GOOD], client=client)
-        self.assertEqual(result, NewsletterSummary("AI & Tech", [Story("Launch.", GOOD.url)]))
+        self.assertEqual(result, NewsletterSummary([Story("T", "Launch.", GOOD.url, "AI & Tech")]))
 
     def test_exactly_one_gemini_call(self) -> None:
         client = FakeClient(reply())
@@ -170,10 +192,20 @@ class SummarizeTests(unittest.TestCase):
         summarize("x" * 29_990 + " END", [], client=client)
         self.assertIn("END", client.sent)
 
-    def test_prompt_and_schema_use_the_fixed_category_list(self) -> None:
-        self.assertEqual(RESPONSE_SCHEMA["properties"]["category"]["enum"], CATEGORIES)
-        for category in CATEGORIES:
-            self.assertIn(category, SYSTEM_PROMPT)
+    def test_prompt_and_schema_use_the_fixed_category_list_per_story(self) -> None:
+        story = RESPONSE_SCHEMA["properties"]["stories"]["items"]
+        self.assertEqual(story["properties"]["category"]["enum"], CATEGORIES)
+        self.assertIn("category", story["required"])
+        self.assertNotIn("category", RESPONSE_SCHEMA["properties"])  # no longer per newsletter
+        self.assertEqual(CATEGORIES, list(CATEGORY_DEFINITIONS))
+        for category, meaning in CATEGORY_DEFINITIONS.items():
+            self.assertIn(f"{category}: {meaning}", SYSTEM_PROMPT)
+
+    def test_prompt_has_the_required_definitions(self) -> None:
+        prompt = " ".join(SYSTEM_PROMPT.split())
+        self.assertIn("Work & Productivity: knowledge work, workflows, tools and automation for getting work done", prompt)
+        self.assertIn("Personal Growth: habits, personal productivity, self-improvement", prompt)
+        self.assertIn("Business & GTM: startups, sales, marketing, finance, revenue operations", prompt)
 
     def test_empty_text_is_an_error(self) -> None:
         with self.assertRaises(SummarizeError):
@@ -192,7 +224,7 @@ class SummarizeTests(unittest.TestCase):
             self.sleep.reset_mock()
             client = FakeClient(reply(), error=api_error(code), fail_first=2)
             result = summarize("Hello", [GOOD], client=client)
-            self.assertEqual(result.category, "AI & Tech")
+            self.assertEqual(result.stories[0].category, "AI & Tech")
             self.assertEqual(client.calls, 3)  # 2 failures + 1 success
             self.assertEqual([c.args[0] for c in self.sleep.call_args_list], [2, 4])
 
@@ -227,7 +259,7 @@ class SummarizeTests(unittest.TestCase):
 class SummarizeAllTests(unittest.TestCase):
     def test_pauses_one_second_between_newsletters_only(self) -> None:
         items = [Newsletter("a", "s", None, "text", [], None) for _ in range(3)]
-        fine = NewsletterSummary("Other", [Story("Fine.", None)])
+        fine = NewsletterSummary([Story("T", "Fine.", None, "Other")])
         with mock.patch.object(main, "summarize", return_value=fine), \
                 mock.patch("time.sleep") as sleep:
             main.summarize_all(items)
@@ -243,7 +275,7 @@ class SummarizeAllTests(unittest.TestCase):
 
     def test_one_failure_does_not_stop_the_rest(self) -> None:
         items = [Newsletter("a", "s", None, body, [], None) for body in ("one", "two")]
-        fine = NewsletterSummary("Other", [Story("Fine.", None)])
+        fine = NewsletterSummary([Story("T", "Fine.", None, "Other")])
         with mock.patch.object(main, "summarize", side_effect=[SummarizeError("boom"), fine]), \
                 mock.patch("time.sleep"):
             result = main.summarize_all(items)

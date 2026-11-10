@@ -23,7 +23,8 @@ SMTP_PORT = 465
 # Gemini settings. The model name lives here so swapping it is a one-line change.
 GEMINI_MODEL = "gemini-3.5-flash-lite"  # free-tier "Flash-Lite" model (checked Nov 2026)
 MAX_INPUT_CHARS = 30_000          # newsletters longer than this are cut before sending
-MAX_STORIES = 3                   # most stories we keep per newsletter
+MAX_STORIES = 5                   # most stories we keep per newsletter
+MAX_TITLE_WORDS = 8               # each story title must stay under this many words
 MAX_WORDS = 20                    # each story sentence must stay under this many words
 MAX_LINKS_SENT = 120              # most candidate links sent to Gemini per newsletter
 
@@ -32,23 +33,25 @@ RETRY_DELAYS = (2, 4, 8)          # seconds to wait before retry 1, 2 and 3
 RETRYABLE_CODES = (429, 503)      # 429 = rate limit, 503 = Gemini overloaded
 PAUSE_BETWEEN_NEWSLETTERS = 1     # seconds; keeps us under the free tier's per-minute limit
 
-# Gemini must pick exactly one of these for each newsletter.
-CATEGORIES = [
-    "AI & Tech",
-    "Business & Finance",
-    "Marketing & Sales",
-    "Startups & Product",
-    "Science & Health",
-    "News & Politics",
-    "Culture & Lifestyle",
-    "Other",
-    "Skip",
-]
+# Gemini picks exactly one of these for each STORY (not each newsletter), so a
+# single newsletter can feed several topics. The one-line definitions are sent
+# to Gemini in the prompt. The digest shows the topics in this order, and the
+# dictionary keeps the order you type here.
+CATEGORY_DEFINITIONS = {
+    "AI & Tech": "artificial intelligence, software, hardware, and the tech industry",
+    "Work & Productivity": "knowledge work, workflows, tools and automation for getting work done",
+    "Business & GTM": "startups, sales, marketing, finance, revenue operations",
+    "Personal Growth": "habits, personal productivity, self-improvement",
+    "Stoicism & Philosophy": "Stoic practice, philosophy, meaning, ethics, ways of thinking",
+    "Health & Performance": "sleep, fitness, nutrition, medicine, mental and physical performance",
+    "News & Politics": "current events, government, policy, local and world news",
+    "Other": "anything that fits none of the topics above",
+}
+CATEGORIES = list(CATEGORY_DEFINITIONS)
 
-# "Skip" is for emails that are not newsletters: order confirmations, welcome
-# messages, verification codes, sign-in links. The digest leaves them out and
-# only mentions how many there were.
-SKIP_CATEGORY = "Skip"
+# Skip is NOT a topic. It is a yes/no flag Gemini sets on a whole email that is
+# not a newsletter: order confirmations, welcome messages, verification codes,
+# sign-in links. The digest leaves those out and only mentions how many there were.
 
 # Path to the CSV log. __file__ is this file's location, so .parent.parent
 # walks up from src/ to the project root regardless of where you run from.

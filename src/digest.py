@@ -3,8 +3,11 @@
 This file only builds text. It never touches the network, so it is easy to
 test with fake data. send.py is the file that actually sends the result.
 
-Layout: a header line, then one "card" per newsletter (emails from the same
-sender are merged into one card), then a one-line footer.
+Layout: a header line, then one section per topic (for example "AI & Tech (7)"),
+then a "could not summarize" section if any summary failed, then a one-line
+footer. Stories from every newsletter are grouped by topic. A story is a bold
+headline (the link), the newsletter name in gray parentheses, and on the next
+line one sentence of context. Topics with no stories are left out.
 """
 
 import html
@@ -12,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parseaddr
 
-from config import CATEGORIES, MAX_STORIES, SKIP_CATEGORY
+from config import CATEGORIES
 from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
@@ -26,26 +29,23 @@ class Digest:
     html: str   # the nicer version most people will see
 
 
-@dataclass
-class Block:
-    """One card in the digest: everything from one sender, merged."""
+@dataclass(frozen=True)
+class Item:
+    """One line in the digest: a story plus the newsletter it came from."""
 
-    name: str              # display name of the sender
-    category: str
-    emails: int            # how many emails were merged into this card
-    stories: list[Story]
+    story: Story
+    newsletter: str   # display name of the sender, e.g. "Morning Brew"
 
 
-def _sender_key(sender: str) -> tuple[str, str]:
-    """Return (merge key, display name) for a From header.
+def _sender_name(sender: str) -> str:
+    """Return the display name from a From header.
 
-    'Morning Brew <crew@morningbrew.com>' -> ('crew@morningbrew.com', 'Morning Brew').
-    parseaddr() splits a header into (display name, address). Two emails with
-    the same address are treated as the same sender.
+    'Morning Brew <crew@morningbrew.com>' -> 'Morning Brew'.
+    parseaddr() splits a header into (display name, address). If there is no
+    display name we fall back to the address, and then to the raw header.
     """
     name, address = parseaddr(sender)
-    key = address.lower() or sender
-    return key, name or address or sender
+    return name or address or sender
 
 
 def _safe_url(url: str | None) -> str | None:
@@ -61,38 +61,36 @@ def _safe_url(url: str | None) -> str | None:
 
 def _organize(
     newsletters: list[Newsletter], results: list[NewsletterSummary | str]
-) -> tuple[list[Block], list[tuple[str, str]], int]:
-    """Turn raw results into (cards, failures, skipped_count).
+) -> tuple[dict[str, list[Item]], list[tuple[str, str]], int, int]:
+    """Turn raw results into (topics, failures, skipped_count, newsletter_count).
 
-    - Emails in the "Skip" category are only counted, never shown.
-    - Emails from the same sender merge into one card, keeping the category
-      of that sender's first email. The card keeps at most MAX_STORIES stories.
-    - Cards are ordered by the CATEGORIES list in config.py, so the layout is
-      predictable. sorted() is stable: same-category cards keep inbox order.
+    - topics maps each category to its stories, in the order of CATEGORIES in
+      config.py. Categories with no stories are left out. Within a topic,
+      stories keep inbox order (first email first).
+    - Emails flagged skip are only counted, never shown.
     - Failures (a string note instead of a summary) are returned as
       (sender name, note) pairs.
+    - newsletter_count is how many different senders contributed stories.
     """
-    blocks: dict[str, Block] = {}
+    grouped: dict[str, list[Item]] = {name: [] for name in CATEGORIES}
     failures: list[tuple[str, str]] = []
+    contributors: set[str] = set()
     skipped = 0
 
     for item, result in zip(newsletters, results):
-        key, name = _sender_key(item.sender)
+        name = _sender_name(item.sender)
         if isinstance(result, str):
             failures.append((name, result))
-        elif result.category == SKIP_CATEGORY:
+        elif result.skip:
             skipped += 1
-        elif key in blocks:
-            blocks[key].emails += 1
-            blocks[key].stories.extend(result.stories)
         else:
-            blocks[key] = Block(name, result.category, 1, list(result.stories))
+            for story in result.stories:
+                grouped[story.category].append(Item(story, name))
+            if result.stories:
+                contributors.add(parseaddr(item.sender)[1].lower() or item.sender)
 
-    for block in blocks.values():
-        del block.stories[MAX_STORIES:]  # keep only the first MAX_STORIES
-
-    ordered = sorted(blocks.values(), key=lambda b: CATEGORIES.index(b.category))
-    return ordered, failures, skipped
+    topics = {category: items for category, items in grouped.items() if items}
+    return topics, failures, skipped, len(contributors)
 
 
 def _plural(count: int, noun: str) -> str:
@@ -100,11 +98,10 @@ def _plural(count: int, noun: str) -> str:
     return f"{count} {noun}" + ("" if count == 1 else "s")
 
 
-def _header_line(blocks: list[Block]) -> str:
-    """e.g. '3 newsletters · AI & Tech, Marketing & Sales'."""
-    categories = list(dict.fromkeys(b.category for b in blocks))  # unique, in order
-    line = _plural(len(blocks), "newsletter")
-    return line + (" · " + ", ".join(categories) if categories else "")
+def _header_line(newsletter_count: int, story_count: int) -> str:
+    """e.g. '3 newsletters · 12 stories'."""
+    stories = f"{story_count} " + ("story" if story_count == 1 else "stories")
+    return f"{_plural(newsletter_count, 'newsletter')} · {stories}"
 
 
 def _footer_line(skipped: int) -> str | None:
@@ -112,6 +109,30 @@ def _footer_line(skipped: int) -> str | None:
     if not skipped:
         return None
     return f"{_plural(skipped, 'non-newsletter email')} skipped."
+
+
+def _story_html(item: Item) -> str:
+    """One story: bold headline (a link when we have a URL), the newsletter
+    name in gray parentheses (never a link), then the sentence on the next line.
+
+    html.escape turns < > & " into harmless codes, so text from an email can
+    never inject markup into our digest.
+    """
+    title = html.escape(item.story.title)
+    url = _safe_url(item.story.url)
+    if url:
+        title = f'<a href="{html.escape(url, quote=True)}" style="{_TITLE_LINK}">{title}</a>'
+    else:
+        title = f'<span style="{_TITLE_PLAIN}">{title}</span>'
+    source = f'<span style="{_SOURCE}">({html.escape(item.newsletter)})</span>'
+    return f'<p style="{_STORY}">{title} {source}<br>{html.escape(item.story.summary)}</p>'
+
+
+def _story_text(item: Item) -> str:
+    """Plain-text version of a story: 'Title (Newsletter): sentence' plus the link on its own line."""
+    line = f"- {item.story.title} ({item.newsletter}): {item.story.summary}"
+    url = _safe_url(item.story.url)
+    return line + (f"\n  {url}" if url else "")
 
 
 def build_digest(
@@ -125,47 +146,32 @@ def build_digest(
     get the same output every time. All styles are inline (written on each
     tag) because many mail apps ignore <style> blocks.
     """
-    blocks, failures, skipped = _organize(newsletters, results)
-    subject = f"Newsletter digest: {when:%a %b} {when.day} ({_plural(len(blocks), 'newsletter')})"
-    header = _header_line(blocks)
+    topics, failures, skipped, newsletter_count = _organize(newsletters, results)
+    story_count = sum(len(items) for items in topics.values())
+    subject = f"Newsletter digest: {when:%a %b} {when.day} ({_plural(newsletter_count, 'newsletter')})"
+    header = _header_line(newsletter_count, story_count)
     footer = _footer_line(skipped)
 
     text: list[str] = [subject, header, ""]
-    cards: list[str] = []
+    sections: list[str] = []
 
-    for block in blocks:
-        label = block.name + (f" ({block.emails} emails)" if block.emails > 1 else "")
-        text.append(f"{label.upper()} · {block.category}")
-        story_html = []
-        for story in block.stories:
-            url = _safe_url(story.url)
-            # html.escape turns < > & " into harmless codes, so text from an
-            # email can never inject markup into our digest.
-            sentence = html.escape(story.summary)
-            if url:  # the sentence itself is the link
-                sentence = f'<a href="{html.escape(url, quote=True)}" style="{_LINK}">{sentence}</a>'
-                text.append(f"- {story.summary}\n  {url}")
-            else:
-                text.append(f"- {story.summary}")
-            story_html.append(f'<p style="{_STORY}">{sentence}</p>')
+    for category, items in topics.items():
+        heading = f"{category} ({len(items)})"
+        text.append(heading.upper())
+        text.extend(_story_text(item) for item in items)
         text.append("")
-        cards.append(
-            f'<div style="{_CARD}">'
-            f'<p style="{_LABEL}">{html.escape(label)} &middot; {html.escape(block.category)}</p>'
-            + "".join(story_html)
-            + "</div>"
+        sections.append(
+            f'<h2 style="{_HEADING}">{html.escape(heading)}</h2>' + "".join(_story_html(item) for item in items)
         )
 
     if failures:
         text.append("COULD NOT SUMMARIZE")
-        items = []
+        rows = []
         for name, note in failures:
             text.append(f"- {name} {note}")
-            items.append(f"<p style=\"{_STORY}\">{html.escape(name)} <i>{html.escape(note)}</i></p>")
+            rows.append(f'<p style="{_STORY}">{html.escape(name)} <i>{html.escape(note)}</i></p>')
         text.append("")
-        cards.append(
-            f'<div style="{_CARD}"><p style="{_LABEL}">Could not summarize</p>' + "".join(items) + "</div>"
-        )
+        sections.append(f'<h2 style="{_HEADING}">Could not summarize</h2>' + "".join(rows))
 
     if footer:
         text.append(footer)
@@ -173,7 +179,7 @@ def build_digest(
     page = (
         f'<div style="{_PAGE}"><div style="{_WRAP}">'
         f'<p style="{_HEADER}">{html.escape(header)}</p>'
-        + "".join(cards)
+        + "".join(sections)
         + (f'<p style="{_FOOTER}">{html.escape(footer)}</p>' if footer else "")
         + "</div></div>"
     )
@@ -182,14 +188,15 @@ def build_digest(
 
 # --- Inline styles, kept in one place so the design is easy to tweak ---
 _FONT = "font-family:-apple-system,'Segoe UI',Helvetica,Arial,sans-serif;"
-_PAGE = f"{_FONT}background:#f3f4f6;padding:24px 12px;"
+_PAGE = f"{_FONT}background:#ffffff;padding:24px 12px;"
 _WRAP = "max-width:600px;margin:0 auto;"
-_HEADER = "font-size:15px;font-weight:600;color:#111827;margin:0 0 20px 4px;"
-_CARD = (
-    "background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;"
-    "padding:24px 26px 10px;margin:0 0 20px;"
+_HEADER = "font-size:14px;font-weight:600;color:#374151;margin:0 0 8px;"
+_HEADING = (
+    "font-size:19px;line-height:1.3;font-weight:700;color:#111827;"
+    "margin:32px 0 16px;padding:0 0 8px;border-bottom:2px solid #e5e7eb;"
 )
-_LABEL = "font-size:12px;color:#6b7280;text-transform:uppercase;letter-spacing:.05em;margin:0 0 16px;"
-_STORY = "font-size:16px;line-height:1.5;color:#111827;margin:0 0 16px;"
-_LINK = "color:#1a56db;text-decoration:none;"
-_FOOTER = "font-size:12px;color:#6b7280;margin:4px 0 0 4px;"
+_STORY = "font-size:15px;line-height:1.5;color:#374151;margin:0 0 16px;"
+_TITLE_LINK = "font-size:16px;font-weight:700;color:#1a56db;text-decoration:none;"
+_TITLE_PLAIN = "font-size:16px;font-weight:700;color:#111827;"
+_SOURCE = "font-size:13px;color:#9ca3af;"
+_FOOTER = "font-size:12px;color:#6b7280;margin:32px 0 0;"

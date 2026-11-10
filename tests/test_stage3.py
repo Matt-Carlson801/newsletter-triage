@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import main  # noqa: E402
 from config import (  # noqa: E402
-    CATEGORIES, MAX_STORIES, MAX_WORDS, SKIP_CATEGORY, ConfigError, Credentials, load_recipient,
+    CATEGORIES, MAX_STORIES, MAX_TITLE_WORDS, MAX_WORDS, ConfigError, Credentials, load_recipient,
 )
-from digest import build_digest  # noqa: E402
+from digest import _organize, build_digest  # noqa: E402
 from fetch import Newsletter  # noqa: E402
 from preview import sample_data, write_preview  # noqa: E402
 from send import SendError, build_message, send_digest  # noqa: E402
@@ -36,7 +36,10 @@ def make_newsletter(sender: str = "Fake Weekly <news@example.com>", subject: str
 
 
 def make_summary(category: str = "AI & Tech", url: str | None = "https://example.com/a") -> NewsletterSummary:
-    return NewsletterSummary(category=category, stories=[Story(summary="Something happened.", url=url)])
+    return NewsletterSummary(stories=[Story("Big news", "Something happened.", url, category)])
+
+
+SKIPPED = NewsletterSummary(stories=[], skip=True)
 
 
 def sender(n: int) -> str:
@@ -51,55 +54,76 @@ class DigestTests(unittest.TestCase):
         self.assertEqual(one.subject, "Newsletter digest: Tue Nov 10 (1 newsletter)")
         self.assertIn("(2 newsletters)", two.subject)
 
-    def test_sentence_is_the_link_and_no_read_links(self) -> None:
+    def test_story_is_bold_link_then_gray_newsletter_name_then_sentence(self) -> None:
         digest = build_digest([make_newsletter()], [make_summary()], WHEN)
-        self.assertIn('<a href="https://example.com/a" style="color:#1a56db;text-decoration:none;">Something happened.</a>', digest.html)
-        self.assertNotIn("Read", digest.html)
-        self.assertIn("Something happened.", digest.text)
-        self.assertIn("https://example.com/a", digest.text)
+        story = ('<a href="https://example.com/a" style="font-size:16px;font-weight:700;'
+                 'color:#1a56db;text-decoration:none;">Big news</a> '
+                 '<span style="font-size:13px;color:#9ca3af;">(Fake Weekly)</span><br>Something happened.')
+        self.assertIn(story, digest.html)
+        self.assertEqual(digest.html.count("<a "), 1)  # only the headline is a link; the name is not
+        self.assertIn("- Big news (Fake Weekly): Something happened.\n  https://example.com/a", digest.text)
+
+    def test_no_cards_and_no_subject_lines(self) -> None:
+        digest = build_digest([make_newsletter(subject="The subject line")], [make_summary()], WHEN)
+        self.assertNotIn("border-radius", digest.html)
+        for version in (digest.text, digest.html):
+            self.assertNotIn("The subject line", version)
+
+    def test_heading_per_category_with_count_and_empty_ones_skipped(self) -> None:
+        items = [make_newsletter(sender(n)) for n in range(1, 4)]
+        results = [make_summary("AI & Tech"), make_summary("AI & Tech"), make_summary("Personal Growth")]
+        digest = build_digest(items, results, WHEN)
+        self.assertIn(">AI &amp; Tech (2)</h2>", digest.html)
+        self.assertIn(">Personal Growth (1)</h2>", digest.html)
+        self.assertIn("AI & TECH (2)", digest.text)
+        for empty in ("Stoicism", "Health", "News &amp; Politics", "Other (", "Business"):
+            self.assertNotIn(empty, digest.html)
+
+    def test_headings_follow_config_category_order(self) -> None:
+        items = [make_newsletter(sender(1)), make_newsletter(sender(2))]
+        results = [make_summary("Other"), make_summary("AI & Tech")]
+        text = build_digest(items, results, WHEN).text
+        self.assertLess(text.index("AI & TECH (1)"), text.index("OTHER (1)"))
+
+    def test_one_newsletter_can_appear_under_several_topics(self) -> None:
+        both = NewsletterSummary([Story("A", "One.", None, "Personal Growth"), Story("B", "Two.", None, "AI & Tech")])
+        digest = build_digest([make_newsletter()], [both], WHEN)
+        self.assertEqual(digest.html.count("(Fake Weekly)"), 2)
+        self.assertIn("1 newsletter ·", digest.text)
+        self.assertIn("2 stories", digest.text)
+
+    def test_two_newsletters_share_a_topic_heading(self) -> None:
+        items = [make_newsletter(sender(1)), make_newsletter(sender(2))]
+        digest = build_digest(items, [make_summary(), make_summary()], WHEN)
+        self.assertEqual(digest.html.count("<h2"), 1)
+        self.assertIn("AI &amp; Tech (2)", digest.html)
+        self.assertIn("(Sender 1)", digest.html)
+        self.assertIn("(Sender 2)", digest.html)
+
+    def test_same_sender_twice_counts_as_one_newsletter(self) -> None:
+        same = "Fake Weekly <News@Example.com>"  # different capitalization, still the same sender
+        items = [make_newsletter(), make_newsletter(same, "Thursday issue")]
+        digest = build_digest(items, [make_summary(), make_summary()], WHEN)
+        self.assertIn("1 newsletter", digest.subject)
+        self.assertIn("1 newsletter · 2 stories", digest.text)
 
     def test_shows_sender_name_but_not_address(self) -> None:
         digest = build_digest([make_newsletter()], [make_summary()], WHEN)
-        for version in (digest.text.lower(), digest.html.lower()):
-            self.assertIn("fake weekly", version)  # plain text shows the label in capitals
-            self.assertNotIn("news@example.com", version)
+        for version in (digest.text, digest.html):
+            self.assertIn("Fake Weekly", version)
+            self.assertNotIn("news@example.com", version.lower())
 
-    def test_story_without_link_is_plain_text(self) -> None:
+    def test_story_without_link_is_plain_bold_text(self) -> None:
         digest = build_digest([make_newsletter()], [make_summary(url=None)], WHEN)
-        self.assertIn("Something happened.", digest.html)
+        self.assertIn("Big news</span> <span", digest.html)  # title still bold, just not a link
         self.assertNotIn("<a ", digest.html)
-
-    def test_header_line_has_count_and_categories(self) -> None:
-        items = [make_newsletter(sender(1)), make_newsletter(sender(2)), make_newsletter(sender(3))]
-        results = [make_summary("Culture & Lifestyle"), make_summary("AI & Tech"), make_summary("AI & Tech")]
-        digest = build_digest(items, results, WHEN)
-        self.assertIn("3 newsletters · AI & Tech, Culture & Lifestyle", digest.text)  # config order, no repeats
-        self.assertIn("3 newsletters · AI &amp; Tech, Culture &amp; Lifestyle", digest.html)
-
-    def test_cards_follow_config_category_order(self) -> None:
-        items = [make_newsletter(sender(1)), make_newsletter(sender(2))]
-        results = [make_summary("Culture & Lifestyle"), make_summary("AI & Tech")]
-        text = build_digest(items, results, WHEN).text
-        self.assertLess(text.index("SENDER 2"), text.index("SENDER 1"))
-
-    def test_same_sender_merges_into_one_card_and_caps_stories(self) -> None:
-        same = "Fake Weekly <News@Example.com>"  # different capitalization, still the same sender
-        items = [make_newsletter(), make_newsletter(same)]
-        results = [make_summary(), NewsletterSummary("AI & Tech", [Story(f"Story {i}.", None) for i in range(4)])]
-        digest = build_digest(items, results, WHEN)
-        self.assertEqual(digest.html.count("border-radius:12px"), 1)       # one card
-        self.assertIn("FAKE WEEKLY (2 EMAILS)", digest.text)
-        self.assertIn("Fake Weekly (2 emails)", digest.html)
-        self.assertEqual(digest.text.count("- "), MAX_STORIES)             # capped
-        self.assertIn("1 newsletter", digest.subject)
 
     def test_skipped_emails_hidden_and_counted_in_footer(self) -> None:
         items = [make_newsletter(sender(1)), make_newsletter(sender(2), "Your code is 123456"), make_newsletter(sender(3))]
-        results = [make_summary(), NewsletterSummary("Skip", []), NewsletterSummary("Skip", [])]
-        digest = build_digest(items, results, WHEN)
+        digest = build_digest(items, [make_summary(), SKIPPED, SKIPPED], WHEN)
         self.assertIn("1 newsletter", digest.subject)
         self.assertNotIn("Sender 2", digest.html)
-        self.assertNotIn("Skip", digest.html.replace("skipped", ""))  # not shown as a category
+        self.assertNotIn("Skip", digest.html.replace("skipped", ""))  # not shown as a topic
         self.assertIn("2 non-newsletter emails skipped.", digest.text)
         self.assertIn("2 non-newsletter emails skipped.", digest.html)
 
@@ -116,13 +140,16 @@ class DigestTests(unittest.TestCase):
     def test_failure_note_is_listed(self) -> None:
         digest = build_digest([make_newsletter()], ["(summary unavailable: rate limit)"], WHEN)
         self.assertIn("COULD NOT SUMMARIZE", digest.text)
+        self.assertIn("Could not summarize</h2>", digest.html)
         self.assertIn("rate limit", digest.html)
 
     def test_html_is_escaped_and_bad_links_dropped(self) -> None:
-        evil = NewsletterSummary("AI & Tech", [Story("<b>bold</b> & more", "javascript:alert(1)")])
+        evil = NewsletterSummary([Story("<i>Title</i>", "<b>bold</b> & more", "javascript:alert(1)", "AI & Tech")])
         digest = build_digest([make_newsletter("<script>alert(1)</script>")], [evil], WHEN)
         self.assertNotIn("<script>", digest.html)
         self.assertNotIn("<b>bold</b>", digest.html)
+        self.assertNotIn("<i>Title</i>", digest.html)
+        self.assertIn("&lt;i&gt;Title&lt;/i&gt;", digest.html)
         self.assertIn("&lt;b&gt;bold&lt;/b&gt; &amp; more", digest.html)
         self.assertNotIn("javascript:", digest.html)
 
@@ -133,19 +160,52 @@ class DigestTests(unittest.TestCase):
 
 
 class SkipAndPreviewTests(unittest.TestCase):
-    def test_skip_category_is_in_config_and_schema(self) -> None:
-        self.assertIn(SKIP_CATEGORY, CATEGORIES)
-        self.assertIn(SKIP_CATEGORY, RESPONSE_SCHEMA["properties"]["category"]["enum"])
-        self.assertIn(SKIP_CATEGORY, SYSTEM_PROMPT)
+    def test_categories_are_the_agreed_topics(self) -> None:
+        self.assertEqual(CATEGORIES, [
+            "AI & Tech", "Work & Productivity", "Business & GTM", "Personal Growth",
+            "Stoicism & Philosophy", "Health & Performance", "News & Politics", "Other",
+        ])
+        self.assertNotIn("Skip", CATEGORIES)
+
+    def test_skip_is_a_newsletter_level_flag_in_schema_and_prompt(self) -> None:
+        self.assertEqual(RESPONSE_SCHEMA["properties"]["skip"], {"type": "boolean"})
+        self.assertIn("skip", RESPONSE_SCHEMA["required"])
+        self.assertIn('"skip": true', SYSTEM_PROMPT)
         self.assertIn(f"fewer than {MAX_WORDS} words", " ".join(SYSTEM_PROMPT.split()))
 
     def test_parse_reply_accepts_skip_with_no_stories(self) -> None:
-        result = parse_reply('{"category": "Skip", "stories": []}', [])
-        self.assertEqual(result.category, SKIP_CATEGORY)
+        result = parse_reply('{"skip": true, "stories": []}', [])
+        self.assertTrue(result.skip)
         self.assertEqual(result.stories, [])
 
-    def test_max_stories_is_three(self) -> None:
-        self.assertEqual(MAX_STORIES, 3)
+    def test_prompt_and_schema_ask_for_title_sentence_and_category(self) -> None:
+        item = RESPONSE_SCHEMA["properties"]["stories"]["items"]
+        self.assertEqual(item["required"], ["title", "summary", "link_id", "category"])
+        self.assertEqual(RESPONSE_SCHEMA["properties"]["stories"]["maxItems"], 5)
+        prompt = " ".join(SYSTEM_PROMPT.split())
+        self.assertIn(f"fewer than {MAX_TITLE_WORDS} words", prompt)
+        self.assertIn("up to 5 distinct stories", prompt)
+
+    def test_sample_data_shape_matches_the_brief(self) -> None:
+        emails, results = sample_data(WHEN)
+        self.assertEqual(len(emails), len(results))
+        self.assertEqual(len({item.sender for item in emails}), 9)       # 9 senders
+        self.assertEqual(sum(isinstance(r, str) for r in results), 1)    # one failure
+        self.assertEqual(sum(isinstance(r, NewsletterSummary) and r.skip for r in results), 1)
+        senders = [item.sender for item in emails]
+        self.assertEqual(len(senders) - len(set(senders)), 1)            # one sender mails twice
+        topics, _, _, _ = _organize(emails, results)
+        self.assertGreaterEqual(len(topics), 5)                          # at least 5 categories appear
+        # Two different newsletters cover the same topic, in more than one topic.
+        shared = [c for c, items in topics.items() if len({i.newsletter for i in items}) >= 2]
+        self.assertGreaterEqual(len(shared), 1)
+        for items in topics.values():
+            for item in items:
+                self.assertLess(len(item.story.title.split()), MAX_TITLE_WORDS, item.story.title)
+                self.assertLess(len(item.story.summary.split()), MAX_WORDS, item.story.summary)
+        for result in results:
+            if isinstance(result, NewsletterSummary):
+                self.assertLessEqual(len(result.stories), MAX_STORIES)
 
     def test_sample_data_uses_only_fake_example_addresses(self) -> None:
         emails, results = sample_data(WHEN)
@@ -157,10 +217,13 @@ class SkipAndPreviewTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = write_preview(Path(folder) / "preview.html", WHEN)
             page = path.read_text(encoding="utf-8")
-        # 4 sender emails became 3 cards because the two Fake Daily emails merge.
-        self.assertIn("3 newsletters", page)
-        self.assertIn("Fake Daily (2 emails)", page)
-        self.assertIn("2 non-newsletter emails skipped.", page)
+        # 10 emails: 7 newsletters with stories, 1 confirmation skipped, 1 failure.
+        self.assertIn("7 newsletters", page)
+        self.assertIn("1 non-newsletter email skipped.", page)
+        self.assertIn("Could not summarize", page)
+        self.assertIn("Business &amp; GTM (7)", page)
+        self.assertNotIn("Other (", page)  # empty topics are not shown
+        self.assertEqual(page.count("<h2"), 8)  # 7 topics + the failure section
 
     def test_preview_flag_never_loads_credentials_or_sends(self) -> None:
         with tempfile.TemporaryDirectory() as folder, \

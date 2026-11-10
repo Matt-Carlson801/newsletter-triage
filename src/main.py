@@ -1,8 +1,8 @@
 """Entry point. Run with:  python src/main.py
 
 Stage 1: read the last 24 hours of newsletters and log sender + date to a CSV.
-Stage 2: one Gemini call per newsletter gives a category plus up to five
-one-sentence stories, each with its best link.
+Stage 2: one Gemini call per newsletter gives up to five one-sentence
+stories, each with its own topic category and best link.
 Stage 3: build one digest email and send it to DIGEST_TO.
 The full body is never printed.
 
@@ -45,7 +45,7 @@ def summarize_all(newsletters: list[Newsletter]) -> list[NewsletterSummary | str
 
 
 def print_newsletters(newsletters: list[Newsletter], results: list[NewsletterSummary | str]) -> None:
-    """Show each newsletter's details, category and stories. The body is deliberately not printed."""
+    """Show each newsletter's details and stories (each with its category). The body is deliberately not printed."""
     # zip() walks the two lists side by side: first newsletter with first result, etc.
     for number, (item, result) in enumerate(zip(newsletters, results), start=1):
         print(f"\n[{number}] {item.subject}")
@@ -55,9 +55,10 @@ def print_newsletters(newsletters: list[Newsletter], results: list[NewsletterSum
         if isinstance(result, str):  # a failure note
             print(f"    {result}")
             continue
-        print(f"    Category: {result.category}")
+        if result.skip:
+            print("    Skipped: not a newsletter.")
         for story in result.stories:
-            print(f"      - {story.summary}")
+            print(f"      - [{story.category}] {story.title}: {story.summary}")
             print(f"        {story.url or '(no link)'}")
 
 
