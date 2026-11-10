@@ -1,0 +1,18 @@
+# Secrets: Gmail app password, Gemini API key, email addresses
+.env
+
+# Real newsletter data and logs (repo is public)
+data/
+
+# Python bytecode cache
+__pycache__/
+
+# Virtual environments
+venv/
+.venv/
+
+# macOS folder metadata
+.DS_Store
+
+# Private coaching notes, not for the public repo
+project-guide.md
