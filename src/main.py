@@ -7,6 +7,8 @@ Stage 3: build one digest email and send it to DIGEST_TO.
 The full body is never printed.
 
 Add --no-send to do everything except send the email.
+Add --preview to build the digest from fake sample data and write preview.html
+(no inbox, no Gemini, no sending).
 """
 
 import argparse
@@ -16,9 +18,10 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from config import LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, ConfigError, load_credentials, load_recipient
+from config import LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, PREVIEW_PATH, ConfigError, load_credentials, load_recipient
 from digest import build_digest
 from fetch import FetchError, Newsletter, connect, fetch_newsletters
+from preview import write_preview
 from send import SendError, send_digest
 from summarize import NewsletterSummary, SummarizeError, summarize
 
@@ -88,11 +91,18 @@ def append_to_log(newsletters: list[Newsletter], log_path: Path) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Run Stages 1 to 3. Returns 0 on success, 1 on an expected problem."""
+    """Run Stages 1 to 3 (or just the preview). Returns 0 on success, 1 on an expected problem."""
     # argparse reads command-line options. Here there is just one: --no-send.
     parser = argparse.ArgumentParser(description="Summarize today's newsletters and email a digest.")
     parser.add_argument("--no-send", action="store_true", help="do everything except send the email")
+    parser.add_argument("--preview", action="store_true",
+                        help="write preview.html from fake sample data (no inbox, Gemini or sending)")
     args = parser.parse_args(argv)
+
+    if args.preview:  # handled first: needs no credentials and no network
+        path = write_preview(PREVIEW_PATH, datetime.now().astimezone())
+        print(f"Preview written to {path}")
+        return 0
 
     try:
         creds = load_credentials()

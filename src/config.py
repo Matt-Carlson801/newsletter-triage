@@ -23,7 +23,8 @@ SMTP_PORT = 465
 # Gemini settings. The model name lives here so swapping it is a one-line change.
 GEMINI_MODEL = "gemini-3.5-flash-lite"  # free-tier "Flash-Lite" model (checked Nov 2026)
 MAX_INPUT_CHARS = 30_000          # newsletters longer than this are cut before sending
-MAX_STORIES = 5                   # most stories we keep per newsletter
+MAX_STORIES = 3                   # most stories we keep per newsletter
+MAX_WORDS = 20                    # each story sentence must stay under this many words
 MAX_LINKS_SENT = 120              # most candidate links sent to Gemini per newsletter
 
 # Retry settings. On a temporary Gemini error we wait, then try again.
@@ -41,12 +42,20 @@ CATEGORIES = [
     "News & Politics",
     "Culture & Lifestyle",
     "Other",
+    "Skip",
 ]
+
+# "Skip" is for emails that are not newsletters: order confirmations, welcome
+# messages, verification codes, sign-in links. The digest leaves them out and
+# only mentions how many there were.
+SKIP_CATEGORY = "Skip"
 
 # Path to the CSV log. __file__ is this file's location, so .parent.parent
 # walks up from src/ to the project root regardless of where you run from.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOG_PATH = PROJECT_ROOT / "data" / "newsletter_log.csv"
+# Where --preview writes its sample digest (gitignored, because it is generated).
+PREVIEW_PATH =PROJECT_ROOT / "preview.html"
 
 
 class ConfigError(Exception):

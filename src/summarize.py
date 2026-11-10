@@ -4,7 +4,7 @@ The rest of the project only calls summarize(). Everything about Gemini is
 hidden in this file, so switching to another provider later (for example
 the Anthropic API) means rewriting this file only.
 
-One Gemini call per newsletter returns BOTH a category and up to five
+One Gemini call per newsletter returns BOTH a category and up to three
 one-sentence stories, each pointing at its best link.
 """
 
@@ -22,6 +22,8 @@ from config import (
     MAX_INPUT_CHARS,
     MAX_LINKS_SENT,
     MAX_STORIES,
+    MAX_WORDS,
+    SKIP_CATEGORY,
     RETRY_DELAYS,
     RETRYABLE_CODES,
 )
@@ -37,8 +39,12 @@ SYSTEM_PROMPT = f"""You summarize email newsletters.
 You get the newsletter text, then a numbered list of candidate links.
 Return JSON with:
 - "category": exactly one of: {", ".join(CATEGORIES)}.
+  Use "{SKIP_CATEGORY}" for emails that are NOT newsletters: order or signup
+  confirmations, welcome messages, verification codes, sign-in links,
+  password resets, receipts. For "{SKIP_CATEGORY}", return an empty stories list.
 - "stories": up to {MAX_STORIES} distinct stories, most important first. Each has:
-  - "summary": ONE plain-text sentence about that story (no markdown).
+  - "summary": ONE plain-text sentence about that story, fewer than {MAX_WORDS}
+    words, no markdown. It should read well as a link headline.
   - "link_id": the number of the single best link for that story, or 0 if
     no listed link fits. Never invent a number.
 Rules: skip ads and sponsor sections. Fewer stories is fine if the newsletter
@@ -136,6 +142,10 @@ def parse_reply(reply: str, candidates: list[Link]) -> NewsletterSummary:
 
     if category not in CATEGORIES:
         category = FALLBACK_CATEGORY
+
+    # A non-newsletter has no stories by design, so it is not an error.
+    if category == SKIP_CATEGORY:
+        return NewsletterSummary(category=category, stories=[])
 
     stories = []
     for raw in raw_stories:
