@@ -16,6 +16,10 @@ IMAP_HOST = "imap.gmail.com"      # Gmail's incoming-mail server
 NEWSLETTER_LABEL = "Newsletters"  # the Gmail label your filter applies
 LOOKBACK_HOURS = 24               # only look at emails newer than this
 
+# Outgoing mail (Stage 3). Port 465 means the connection is encrypted from the first byte.
+SMTP_HOST = "smtp.gmail.com"      # Gmail's outgoing-mail server
+SMTP_PORT = 465
+
 # Gemini settings. The model name lives here so swapping it is a one-line change.
 GEMINI_MODEL = "gemini-3.5-flash-lite"  # free-tier "Flash-Lite" model (checked Nov 2026)
 MAX_INPUT_CHARS = 30_000          # newsletters longer than this are cut before sending
@@ -82,3 +86,16 @@ def load_credentials() -> Credentials:
         )
 
     return Credentials(address=address, app_password=app_password)
+
+
+def load_recipient() -> str:
+    """Read DIGEST_TO: the address the daily digest is sent to.
+
+    Kept separate from load_credentials() because only the sending step
+    needs it. Raises ConfigError if it is missing.
+    """
+    load_dotenv(PROJECT_ROOT / ".env")
+    recipient = os.environ.get("DIGEST_TO", "").strip()
+    if not recipient:
+        raise ConfigError("Missing setting: DIGEST_TO. Add it to your .env file (see .env.example).")
+    return recipient

@@ -3,16 +3,23 @@
 Stage 1: read the last 24 hours of newsletters and log sender + date to a CSV.
 Stage 2: one Gemini call per newsletter gives a category plus up to five
 one-sentence stories, each with its best link.
+Stage 3: build one digest email and send it to DIGEST_TO.
 The full body is never printed.
+
+Add --no-send to do everything except send the email.
 """
 
+import argparse
 import csv
 import sys
 import time
+from datetime import datetime
 from pathlib import Path
 
-from config import LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, ConfigError, load_credentials
+from config import LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, ConfigError, load_credentials, load_recipient
+from digest import build_digest
 from fetch import FetchError, Newsletter, connect, fetch_newsletters
+from send import SendError, send_digest
 from summarize import NewsletterSummary, SummarizeError, summarize
 
 
@@ -80,10 +87,16 @@ def append_to_log(newsletters: list[Newsletter], log_path: Path) -> int:
     return added
 
 
-def main() -> int:
-    """Run Stages 1 and 2. Returns 0 on success, 1 on an expected problem."""
+def main(argv: list[str] | None = None) -> int:
+    """Run Stages 1 to 3. Returns 0 on success, 1 on an expected problem."""
+    # argparse reads command-line options. Here there is just one: --no-send.
+    parser = argparse.ArgumentParser(description="Summarize today's newsletters and email a digest.")
+    parser.add_argument("--no-send", action="store_true", help="do everything except send the email")
+    args = parser.parse_args(argv)
+
     try:
         creds = load_credentials()
+        recipient = None if args.no_send else load_recipient()  # fail early, before any Gemini calls
         conn = connect(creds)
         try:
             newsletters = fetch_newsletters(conn)
@@ -104,6 +117,18 @@ def main() -> int:
 
     added = append_to_log(newsletters, LOG_PATH)
     print(f"\nLogged {added} new row(s) to {LOG_PATH.name}.")
+
+    if recipient is None:
+        print("--no-send given: digest not sent.")
+        return 0
+
+    digest = build_digest(newsletters, results, datetime.now().astimezone())
+    try:
+        send_digest(digest, creds, recipient)
+    except SendError as problem:
+        print(f"Error: {problem}")
+        return 1
+    print("Digest sent.")
     return 0
 
 
