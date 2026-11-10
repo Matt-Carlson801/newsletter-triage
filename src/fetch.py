@@ -7,6 +7,7 @@ ships with a client for it (imaplib), and a parser for email messages
 
 import email
 import imaplib
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email import policy
@@ -39,6 +40,7 @@ class Newsletter:
     unsubscribe: str | None      # the List-Unsubscribe header, if present
     web_url: str | None = None   # the email's "view in browser" page, if it has one
     message_id: str | None = None  # the Message-ID header; lets us build a Gmail search link
+    thread_id: str | None = None   # Gmail's thread id as hex (from X-GM-THRID); opens the email directly
 
 
 class _TextExtractor(HTMLParser):
@@ -96,6 +98,29 @@ def parse_message(raw: bytes) -> Newsletter:
     )
 
 
+# Gmail adds a custom IMAP field, X-GM-THRID: a big decimal number that
+# identifies the conversation. The reply looks like: 1 (X-GM-THRID 1783... ...)
+THREAD_ID_PATTERN = re.compile(rb"X-GM-THRID\s+(\d+)")
+
+
+def parse_thread_id(parts: list) -> str | None:
+    """Pull Gmail's thread id out of an IMAP FETCH reply and return it as hex.
+
+    imaplib hands back a list. The first item is usually a tuple
+    (the response line, the raw email), and Gmail may put X-GM-THRID in that
+    line or in a short trailing item after the email, so we look at both.
+    Gmail's web address uses the hex form of the number (e.g. 1783... -> 18ab...).
+    Returns None if the field is missing.
+    """
+    for part in parts:
+        line = part[0] if isinstance(part, tuple) else part
+        if isinstance(line, bytes):
+            found = THREAD_ID_PATTERN.search(line)
+            if found:
+                return format(int(found.group(1)), "x")
+    return None
+
+
 def connect(creds: Credentials) -> imaplib.IMAP4_SSL:
     """Open a secure connection to Gmail and log in."""
     try:
@@ -137,10 +162,12 @@ def fetch_newsletters(conn: imaplib.IMAP4_SSL) -> list[Newsletter]:
     newsletters = []
     for message_id in data[0].split():
         # BODY.PEEK[] downloads the whole message without marking it read.
-        status, parts = conn.fetch(message_id, "(BODY.PEEK[])")
+        # X-GM-THRID also asks Gmail for the conversation id (for the link).
+        status, parts = conn.fetch(message_id, "(X-GM-THRID BODY.PEEK[])")
         if status != "OK" or not parts or not isinstance(parts[0], tuple):
             continue  # skip a message we could not download
         newsletter = parse_message(parts[0][1])
+        newsletter.thread_id = parse_thread_id(parts)
         if newsletter.date >= cutoff:
             newsletters.append(newsletter)
     return newsletters

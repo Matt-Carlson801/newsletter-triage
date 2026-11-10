@@ -12,7 +12,7 @@ from pathlib import Path
 # Let the tests import the modules that live in src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from fetch import parse_message  # noqa: E402
+from fetch import fetch_newsletters, parse_thread_id, parse_message  # noqa: E402
 from links import Link, extract_links, filter_links, find_web_version  # noqa: E402
 from main import append_to_log  # noqa: E402
 
@@ -108,3 +108,35 @@ class LogTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ThreadIdTests(unittest.TestCase):
+    """X-GM-THRID parsing, using fake IMAP replies (no network)."""
+
+    # 1783216449279354291 in hex:
+    HEX = format(1783216449279354291, "x")
+
+    def test_thread_id_before_body(self) -> None:
+        parts = [(b"1 (X-GM-THRID 1783216449279354291 BODY[] {5}", b"hello"), b")"]
+        self.assertEqual(parse_thread_id(parts), self.HEX)
+
+    def test_thread_id_after_body(self) -> None:
+        parts = [(b"1 (BODY[] {5}", b"hello"), b" X-GM-THRID 1783216449279354291)"]
+        self.assertEqual(parse_thread_id(parts), self.HEX)
+
+    def test_missing_thread_id(self) -> None:
+        self.assertIsNone(parse_thread_id([(b"1 (BODY[] {5}", b"hello"), b")"]))
+        self.assertIsNone(parse_thread_id([]))
+
+    def test_fetch_newsletters_sets_thread_id(self) -> None:
+        from unittest import mock
+        raw = (b"From: A <a@example.com>\r\nSubject: Hi\r\nMessage-ID: <m@x>\r\n"
+               b"Date: " + datetime.now(timezone.utc).strftime("%a, %d %b %Y %H:%M:%S +0000").encode()
+               + b"\r\n\r\nBody")
+        conn = mock.Mock()
+        conn.select.return_value = ("OK", [b"1"])
+        conn.search.return_value = ("OK", [b"1"])
+        conn.fetch.return_value = ("OK", [(b"1 (X-GM-THRID 1783216449279354291 BODY[] {99}", raw), b")"])
+        result = fetch_newsletters(conn)
+        self.assertEqual(result[0].thread_id, self.HEX)
+        self.assertIn("X-GM-THRID", conn.fetch.call_args.args[1])

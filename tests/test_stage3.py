@@ -18,7 +18,7 @@ import main  # noqa: E402
 from config import (  # noqa: E402
     CATEGORIES, MAX_STORIES, MAX_TITLE_WORDS, MAX_WORDS, ConfigError, Credentials, load_recipient,
 )
-from digest import _organize, build_digest, gmail_fallback_url  # noqa: E402
+from digest import _organize, build_digest, gmail_fallback_url, gmail_thread_url  # noqa: E402
 from fetch import Newsletter  # noqa: E402
 from preview import PREVIEW_GMAIL_ADDRESS, sample_data, write_preview  # noqa: E402
 from send import SendError, build_message, send_digest  # noqa: E402
@@ -161,45 +161,62 @@ class DigestTests(unittest.TestCase):
 
 class NewsletterLinkTests(unittest.TestCase):
     ADDRESS = "me@example.com"
+    LINK_STYLE = "font-size:13px;color:#6b7280;text-decoration:underline;"
 
-    def digest_for(self, web_url: str | None, message_id: str | None, address: str | None = ADDRESS):
+    def digest_for(self, thread_id: str | None, message_id: str | None, address: str | None = ADDRESS,
+                   web_url: str | None = None):
         item = make_newsletter()
-        item.web_url, item.message_id = web_url, message_id
+        item.thread_id, item.message_id, item.web_url = thread_id, message_id, web_url
         return build_digest([item], [make_summary()], WHEN, address)
 
-    def test_name_links_to_web_version_when_found(self) -> None:
-        digest = self.digest_for("https://example.com/web", "<abc@mail.example.com>")
-        self.assertIn('(<a href="https://example.com/web" style="font-size:13px;color:#9ca3af;'
-                      'text-decoration:none;">Fake Weekly</a>)', digest.html)
-        self.assertNotIn("mail.google.com", digest.html)  # web version wins over the fallback
-        self.assertIn("Newsletter: https://example.com/web", digest.text)
+    def test_name_links_to_gmail_thread(self) -> None:
+        digest = self.digest_for("18abc", "<abc@mail.example.com>")
+        self.assertIn('(<a href="https://mail.google.com/mail/u/me@example.com/#all/18abc" '
+                      f'style="{self.LINK_STYLE}">Fake Weekly</a>)', digest.html)
+        self.assertNotIn("rfc822msgid", digest.html)  # thread link wins over the fallback
+        self.assertIn("Newsletter: https://mail.google.com/mail/u/me@example.com/#all/18abc", digest.text)
 
-    def test_name_falls_back_to_gmail_link(self) -> None:
+    def test_web_version_is_not_used_in_the_digest(self) -> None:
+        digest = self.digest_for("18abc", None, web_url="https://example.com/web")
+        self.assertNotIn("example.com/web", digest.html)
+        self.assertNotIn("example.com/web", digest.text)
+
+    def test_name_falls_back_to_message_id_search(self) -> None:
         digest = self.digest_for(None, "<abc+1=2@mail.example.com>")
         self.assertIn("https://mail.google.com/mail/u/me@example.com/#search/rfc822msgid%3A"
                       "abc%2B1%3D2%40mail.example.com", digest.html)
         self.assertEqual(digest.html.count("<a "), 2)  # headline + newsletter name
 
+    def test_name_link_is_underlined_medium_gray_same_size(self) -> None:
+        digest = self.digest_for("18abc", None)
+        self.assertIn("text-decoration:underline", digest.html)
+        self.assertIn("font-size:13px;color:#6b7280", digest.html)
+
     def test_headline_still_links_to_the_article(self) -> None:
-        digest = self.digest_for("https://example.com/web", None)
+        digest = self.digest_for("18abc", None)
         self.assertIn('<a href="https://example.com/a" style="font-size:16px', digest.html)
 
     def test_no_link_when_nothing_is_available(self) -> None:
-        for digest in (self.digest_for(None, None), self.digest_for(None, "<a@b>", address=None)):
+        for digest in (self.digest_for(None, None), self.digest_for("18abc", "<a@b>", address=None)):
             self.assertIn("(Fake Weekly)</span>", digest.html)
             self.assertEqual(digest.html.count("<a "), 1)
 
-    def test_only_http_links_allowed_for_web_version(self) -> None:
-        digest = self.digest_for("javascript:alert(1)", None)
-        self.assertNotIn("javascript:", digest.html)
-        self.assertEqual(digest.html.count("<a "), 1)
+    def test_non_hex_thread_id_is_ignored(self) -> None:
+        digest = self.digest_for('zz"><script>', None)
+        self.assertNotIn("<script>", digest.html)
+        self.assertNotIn("#all/", digest.html)
 
     def test_everything_is_escaped(self) -> None:
-        digest = self.digest_for('https://example.com/"onmouseover="x', None)
-        self.assertNotIn('"onmouseover=', digest.html)
         url = gmail_fallback_url('a"b@example.com', '<x"y>')
         self.assertNotIn('"', url)
         self.assertNotIn("<", url)
+        self.assertNotIn('"', gmail_thread_url('a"b@example.com', "18abc"))
+
+    def test_thread_url_format(self) -> None:
+        self.assertEqual(gmail_thread_url("me@example.com", "18AbC"),
+                         "https://mail.google.com/mail/u/me@example.com/#all/18abc")
+        self.assertIsNone(gmail_thread_url("me@example.com", None))
+        self.assertIsNone(gmail_thread_url(None, "18abc"))
 
     def test_fallback_url_format(self) -> None:
         self.assertEqual(
@@ -209,14 +226,15 @@ class NewsletterLinkTests(unittest.TestCase):
         self.assertIsNone(gmail_fallback_url("me@example.com", None))
         self.assertIsNone(gmail_fallback_url(None, "<id@host>"))
 
-    def test_preview_mixes_web_links_and_gmail_fallbacks(self) -> None:
+    def test_preview_mixes_thread_links_and_fallbacks(self) -> None:
         emails, _ = sample_data(WHEN)
-        self.assertTrue(any(item.web_url for item in emails))
-        self.assertTrue(any(not item.web_url for item in emails))
+        self.assertTrue(any(item.thread_id for item in emails))
+        self.assertTrue(any(not item.thread_id for item in emails))
         with tempfile.TemporaryDirectory() as folder:
             page = write_preview(Path(folder) / "preview.html", WHEN).read_text(encoding="utf-8")
-        self.assertIn("/web-version/latest", page)
+        self.assertIn(f"mail.google.com/mail/u/{PREVIEW_GMAIL_ADDRESS}/#all/", page)
         self.assertIn(f"mail.google.com/mail/u/{PREVIEW_GMAIL_ADDRESS}/#search/rfc822msgid%3A", page)
+        self.assertNotIn("web-version", page)
 
     def test_main_passes_gmail_address_to_digest(self) -> None:
         with mock.patch("main.build_digest", wraps=build_digest) as builder, \

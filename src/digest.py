@@ -11,6 +11,7 @@ line one sentence of context. Topics with no stories are left out.
 """
 
 import html
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parseaddr
@@ -36,7 +37,7 @@ class Item:
 
     story: Story
     newsletter: str   # display name of the sender, e.g. "Morning Brew"
-    source_url: str | None = None   # where the newsletter name links: web version, else Gmail
+    source_url: str | None = None   # where the newsletter name links: the email in Gmail
 
 
 def _sender_name(sender: str) -> str:
@@ -77,9 +78,27 @@ def gmail_fallback_url(address: str | None, message_id: str | None) -> str | Non
     )
 
 
+def gmail_thread_url(address: str | None, thread_id: str | None) -> str | None:
+    """Build a link that opens the email's conversation directly in Gmail.
+
+    `thread_id` is the hex form of Gmail's X-GM-THRID. Returns None if either
+    piece is missing or the id is not plain hex.
+    """
+    thread_id = (thread_id or "").strip().lower()
+    if not address or not re.fullmatch(r"[0-9a-f]+", thread_id):
+        return None
+    return f"https://mail.google.com/mail/u/{quote(address.strip(), safe='@')}/#all/{thread_id}"
+
+
 def _source_url(item: Newsletter, gmail_address: str | None) -> str | None:
-    """The link for the gray newsletter name: web version first, then Gmail."""
-    return _safe_url(item.web_url) or _safe_url(gmail_fallback_url(gmail_address, item.message_id))
+    """The link for the newsletter name: the Gmail thread, else a Message-ID search.
+
+    (item.web_url is still collected by fetch.py but no longer used here.)
+    """
+    return _safe_url(
+        gmail_thread_url(gmail_address, item.thread_id)
+        or gmail_fallback_url(gmail_address, item.message_id)
+    )
 
 
 def _organize(
@@ -138,7 +157,7 @@ def _footer_line(skipped: int) -> str | None:
 
 def _story_html(item: Item) -> str:
     """One story: bold headline (a link when we have a URL), the newsletter
-    name in gray parentheses (a link to the web version or the Gmail copy when
+    name in gray parentheses (a link to the original email in Gmail when
     we have one), then the sentence on the next line.
 
     html.escape turns < > & " into harmless codes, so text from an email can
@@ -178,7 +197,7 @@ def build_digest(
 
     `when` is passed in (instead of calling datetime.now() in here) so tests
     get the same output every time. `gmail_address` is used only to build the
-    Gmail fallback link for newsletters with no web version. All styles are inline (written on each
+    Gmail links on the newsletter names. All styles are inline (written on each
     tag) because many mail apps ignore <style> blocks.
     """
     topics, failures, skipped, newsletter_count = _organize(newsletters, results, gmail_address)
@@ -234,5 +253,5 @@ _STORY = "font-size:15px;line-height:1.5;color:#374151;margin:0 0 16px;"
 _TITLE_LINK = "font-size:16px;font-weight:700;color:#1a56db;text-decoration:none;"
 _TITLE_PLAIN = "font-size:16px;font-weight:700;color:#111827;"
 _SOURCE = "font-size:13px;color:#9ca3af;"
-_SOURCE_LINK = "font-size:13px;color:#9ca3af;text-decoration:none;"
+_SOURCE_LINK = "font-size:13px;color:#6b7280;text-decoration:underline;"
 _FOOTER = "font-size:12px;color:#6b7280;margin:32px 0 0;"

@@ -6,10 +6,11 @@ Everything here is invented: the newsletter names, the stories and the links
 one sender mails twice, one email is a signup confirmation (skipped), and one
 summary failed. Stories cover seven topics, and several topics (AI & Tech,
 Work & Productivity, Business & GTM) are covered by more than one newsletter.
-Five emails have a web-version link; the rest use the Gmail fallback link.
+Five emails have a (fake) Gmail thread id; the rest use the Message-ID fallback link.
 "Other" is left empty on purpose, to show that empty topics are not shown.
 """
 
+import zlib
 from datetime import datetime
 from pathlib import Path
 
@@ -18,19 +19,19 @@ from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
 
-PREVIEW_GMAIL_ADDRESS = "reader@example.com"  # fake; used for the Gmail fallback links
+PREVIEW_GMAIL_ADDRESS = "reader@example.com"  # fake; used for the Gmail links
 
 
-def _email(name: str, domain: str, subject: str, when: datetime, web: bool = False) -> Newsletter:
+def _email(name: str, domain: str, subject: str, when: datetime, thread: bool = False) -> Newsletter:
     """A fake email. Only the sender and the two source links matter to the digest.
 
-    web=True gives it a "view in browser" page; otherwise the digest falls back
-    to a Gmail search link built from the (fake) Message-ID.
+    thread=True gives it a fake Gmail thread id (a direct link); otherwise the
+    digest falls back to a Gmail search link built from the (fake) Message-ID.
     """
     return Newsletter(
         sender=f"{name} <hello@{domain}.example.com>", subject=subject, date=when,
         body="", links=[], unsubscribe=None,
-        web_url=f"https://{domain}.example.com/web-version/latest" if web else None,
+        thread_id=f"{zlib.crc32(subject.encode()):x}0fa4e" if thread else None,  # fake hex id
         message_id=f"<{domain}-{subject.split()[0].lower()}@mail.{domain}.example.com>",
     )
 
@@ -43,16 +44,16 @@ def _story(category: str, title: str, summary: str, path: str | None) -> Story:
 def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummary | str]]:
     """Return (fake newsletters, fake results) for the preview."""
     emails = [
-        _email("The Context Window", "contextwindow", "Small models, big laptops", when, web=True),
+        _email("The Context Window", "contextwindow", "Small models, big laptops", when, thread=True),
         _email("Ledger & Lantern", "ledgerlantern", "Why rate cuts stalled again", when),
-        _email("Pipeline Pulse", "pipelinepulse", "Cold email is not dead, lazy email is", when, web=True),
+        _email("Pipeline Pulse", "pipelinepulse", "Cold email is not dead, lazy email is", when, thread=True),
         _email("The Context Window", "contextwindow", "Thursday deep dive: agents in production", when),
-        _email("Seed Stage Weekly", "seedstage", "The quiet comeback of the $2M round", when, web=True),
+        _email("Seed Stage Weekly", "seedstage", "The quiet comeback of the $2M round", when, thread=True),
         _email("Bright Basket", "brightbasket", "Welcome! Please confirm your email address", when),
-        _email("The Lab Notebook", "labnotebook", "Sleep, salt and a surprising protein", when, web=True),
+        _email("The Lab Notebook", "labnotebook", "Sleep, salt and a surprising protein", when, thread=True),
         _email("Harbor Politics Brief", "harborbrief", "Port funding vote moves to Tuesday", when),
         _email("The Weekend Reader", "weekendreader", "Issue 212: the long way home", when),
-        _email("Daily Stoic Post", "stoicpost", "The obstacle is the way, again", when, web=True),
+        _email("Daily Stoic Post", "stoicpost", "The obstacle is the way, again", when, thread=True),
     ]
     results: list[NewsletterSummary | str] = [
         # The Context Window, Monday
