@@ -133,7 +133,7 @@ def main(argv: list[str] | None = None) -> int:
         print("--no-send given: digest not sent.")
         return 0
 
-    digest = build_digest(newsletters, results, datetime.now().astimezone())
+    digest = build_digest(newsletters, results, datetime.now().astimezone(), creds.address)
     try:
         send_digest(digest, creds, recipient)
     except SendError as problem:

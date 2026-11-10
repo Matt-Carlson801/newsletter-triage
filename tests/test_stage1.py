@@ -13,7 +13,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from fetch import parse_message  # noqa: E402
-from links import Link, extract_links  # noqa: E402
+from links import Link, extract_links, filter_links, find_web_version  # noqa: E402
 from main import append_to_log  # noqa: E402
 
 FAKE_EMAIL = b"""From: Example Weekly <hello@example.com>
@@ -25,6 +25,43 @@ Content-Type: text/plain; charset=utf-8
 Read the full story at https://example.com/story.
 Also see https://example.com/other, and https://example.com/story.
 """
+
+
+WEB_EMAIL = b"""From: Example Weekly <hello@example.com>
+Subject: Issue 43
+Date: Mon, 09 Nov 2026 12:00:00 +0000
+Message-ID: <abc123@mail.example.com>
+Content-Type: text/html; charset=utf-8
+
+<a href="https://example.com/unsub">Unsubscribe</a>
+<a href="https://example.com/v/9">View in browser</a>
+<a href="https://example.com/story">A story</a>
+"""
+
+
+class WebVersionTests(unittest.TestCase):
+    def test_anchor_text_finds_web_version_and_message_id(self) -> None:
+        item = parse_message(WEB_EMAIL)
+        self.assertEqual(item.web_url, "https://example.com/v/9")
+        self.assertEqual(item.message_id, "<abc123@mail.example.com>")
+
+    def test_phrases_and_url_words(self) -> None:
+        for text in ("View Online", "read online", "Web version", "View this email in your browser"):
+            self.assertEqual(find_web_version([Link(text, "https://e.com/x")]), "https://e.com/x", text)
+        self.assertEqual(find_web_version([Link("", "https://e.com/web-version/3")]), "https://e.com/web-version/3")
+
+    def test_none_when_absent_or_not_http_or_unsubscribe(self) -> None:
+        self.assertIsNone(find_web_version([Link("A story", "https://e.com/s")]))
+        self.assertIsNone(find_web_version([Link("View online", "mailto:x@e.com")]))
+        self.assertIsNone(find_web_version([Link("Unsubscribe", "https://e.com/unsubscribe/web-version")]))
+
+    def test_web_version_link_is_not_offered_as_a_story(self) -> None:
+        links = [Link("View in browser", "https://e.com/v"), Link("A story", "https://e.com/s")]
+        self.assertEqual([l.url for l in filter_links(links)], ["https://e.com/s"])
+
+    def test_missing_message_id_is_none(self) -> None:
+        self.assertIsNone(parse_message(FAKE_EMAIL).message_id)
+        self.assertIsNone(parse_message(FAKE_EMAIL).web_url)
 
 
 class ParseMessageTests(unittest.TestCase):

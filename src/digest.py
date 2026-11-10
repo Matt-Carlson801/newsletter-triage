@@ -14,6 +14,7 @@ import html
 from dataclasses import dataclass
 from datetime import datetime
 from email.utils import parseaddr
+from urllib.parse import quote
 
 from config import CATEGORIES
 from fetch import Newsletter
@@ -35,6 +36,7 @@ class Item:
 
     story: Story
     newsletter: str   # display name of the sender, e.g. "Morning Brew"
+    source_url: str | None = None   # where the newsletter name links: web version, else Gmail
 
 
 def _sender_name(sender: str) -> str:
@@ -59,8 +61,30 @@ def _safe_url(url: str | None) -> str | None:
     return None
 
 
+def gmail_fallback_url(address: str | None, message_id: str | None) -> str | None:
+    """Build a Gmail search link that opens one email by its Message-ID header.
+
+    Gmail's search understands rfc822msgid:<id>. The id is URL-encoded so
+    characters like < > + = & # cannot break the link. Returns None if either
+    piece is missing.
+    """
+    message_id = (message_id or "").strip().strip("<>").strip()
+    if not address or not message_id:
+        return None
+    return (
+        f"https://mail.google.com/mail/u/{quote(address.strip(), safe='@')}/"
+        f"#search/rfc822msgid%3A{quote(message_id, safe='')}"
+    )
+
+
+def _source_url(item: Newsletter, gmail_address: str | None) -> str | None:
+    """The link for the gray newsletter name: web version first, then Gmail."""
+    return _safe_url(item.web_url) or _safe_url(gmail_fallback_url(gmail_address, item.message_id))
+
+
 def _organize(
-    newsletters: list[Newsletter], results: list[NewsletterSummary | str]
+    newsletters: list[Newsletter], results: list[NewsletterSummary | str],
+    gmail_address: str | None = None,
 ) -> tuple[dict[str, list[Item]], list[tuple[str, str]], int, int]:
     """Turn raw results into (topics, failures, skipped_count, newsletter_count).
 
@@ -84,8 +108,9 @@ def _organize(
         elif result.skip:
             skipped += 1
         else:
+            source_url = _source_url(item, gmail_address)
             for story in result.stories:
-                grouped[story.category].append(Item(story, name))
+                grouped[story.category].append(Item(story, name, source_url))
             if result.stories:
                 contributors.add(parseaddr(item.sender)[1].lower() or item.sender)
 
@@ -113,7 +138,8 @@ def _footer_line(skipped: int) -> str | None:
 
 def _story_html(item: Item) -> str:
     """One story: bold headline (a link when we have a URL), the newsletter
-    name in gray parentheses (never a link), then the sentence on the next line.
+    name in gray parentheses (a link to the web version or the Gmail copy when
+    we have one), then the sentence on the next line.
 
     html.escape turns < > & " into harmless codes, so text from an email can
     never inject markup into our digest.
@@ -124,7 +150,13 @@ def _story_html(item: Item) -> str:
         title = f'<a href="{html.escape(url, quote=True)}" style="{_TITLE_LINK}">{title}</a>'
     else:
         title = f'<span style="{_TITLE_PLAIN}">{title}</span>'
-    source = f'<span style="{_SOURCE}">({html.escape(item.newsletter)})</span>'
+    name = html.escape(item.newsletter)
+    source_url = _safe_url(item.source_url)
+    if source_url:
+        source = (f'<span style="{_SOURCE}">(<a href="{html.escape(source_url, quote=True)}" '
+                  f'style="{_SOURCE_LINK}">{name}</a>)</span>')
+    else:
+        source = f'<span style="{_SOURCE}">({name})</span>'
     return f'<p style="{_STORY}">{title} {source}<br>{html.escape(item.story.summary)}</p>'
 
 
@@ -132,21 +164,24 @@ def _story_text(item: Item) -> str:
     """Plain-text version of a story: 'Title (Newsletter): sentence' plus the link on its own line."""
     line = f"- {item.story.title} ({item.newsletter}): {item.story.summary}"
     url = _safe_url(item.story.url)
-    return line + (f"\n  {url}" if url else "")
+    source_url = _safe_url(item.source_url)
+    return line + (f"\n  {url}" if url else "") + (f"\n  Newsletter: {source_url}" if source_url else "")
 
 
 def build_digest(
     newsletters: list[Newsletter],
     results: list[NewsletterSummary | str],
     when: datetime,
+    gmail_address: str | None = None,
 ) -> Digest:
     """Assemble the digest from newsletters and their summaries.
 
     `when` is passed in (instead of calling datetime.now() in here) so tests
-    get the same output every time. All styles are inline (written on each
+    get the same output every time. `gmail_address` is used only to build the
+    Gmail fallback link for newsletters with no web version. All styles are inline (written on each
     tag) because many mail apps ignore <style> blocks.
     """
-    topics, failures, skipped, newsletter_count = _organize(newsletters, results)
+    topics, failures, skipped, newsletter_count = _organize(newsletters, results, gmail_address)
     story_count = sum(len(items) for items in topics.values())
     subject = f"Newsletter digest: {when:%a %b} {when.day} ({_plural(newsletter_count, 'newsletter')})"
     header = _header_line(newsletter_count, story_count)
@@ -199,4 +234,5 @@ _STORY = "font-size:15px;line-height:1.5;color:#374151;margin:0 0 16px;"
 _TITLE_LINK = "font-size:16px;font-weight:700;color:#1a56db;text-decoration:none;"
 _TITLE_PLAIN = "font-size:16px;font-weight:700;color:#111827;"
 _SOURCE = "font-size:13px;color:#9ca3af;"
+_SOURCE_LINK = "font-size:13px;color:#9ca3af;text-decoration:none;"
 _FOOTER = "font-size:12px;color:#6b7280;margin:32px 0 0;"

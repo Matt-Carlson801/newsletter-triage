@@ -6,6 +6,7 @@ Everything here is invented: the newsletter names, the stories and the links
 one sender mails twice, one email is a signup confirmation (skipped), and one
 summary failed. Stories cover seven topics, and several topics (AI & Tech,
 Work & Productivity, Business & GTM) are covered by more than one newsletter.
+Five emails have a web-version link; the rest use the Gmail fallback link.
 "Other" is left empty on purpose, to show that empty topics are not shown.
 """
 
@@ -17,11 +18,20 @@ from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
 
-def _email(name: str, domain: str, subject: str, when: datetime) -> Newsletter:
-    """A fake email. Only the sender matters to the digest."""
+PREVIEW_GMAIL_ADDRESS = "reader@example.com"  # fake; used for the Gmail fallback links
+
+
+def _email(name: str, domain: str, subject: str, when: datetime, web: bool = False) -> Newsletter:
+    """A fake email. Only the sender and the two source links matter to the digest.
+
+    web=True gives it a "view in browser" page; otherwise the digest falls back
+    to a Gmail search link built from the (fake) Message-ID.
+    """
     return Newsletter(
         sender=f"{name} <hello@{domain}.example.com>", subject=subject, date=when,
         body="", links=[], unsubscribe=None,
+        web_url=f"https://{domain}.example.com/web-version/latest" if web else None,
+        message_id=f"<{domain}-{subject.split()[0].lower()}@mail.{domain}.example.com>",
     )
 
 
@@ -33,16 +43,16 @@ def _story(category: str, title: str, summary: str, path: str | None) -> Story:
 def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummary | str]]:
     """Return (fake newsletters, fake results) for the preview."""
     emails = [
-        _email("The Context Window", "contextwindow", "Small models, big laptops", when),
+        _email("The Context Window", "contextwindow", "Small models, big laptops", when, web=True),
         _email("Ledger & Lantern", "ledgerlantern", "Why rate cuts stalled again", when),
-        _email("Pipeline Pulse", "pipelinepulse", "Cold email is not dead, lazy email is", when),
+        _email("Pipeline Pulse", "pipelinepulse", "Cold email is not dead, lazy email is", when, web=True),
         _email("The Context Window", "contextwindow", "Thursday deep dive: agents in production", when),
-        _email("Seed Stage Weekly", "seedstage", "The quiet comeback of the $2M round", when),
+        _email("Seed Stage Weekly", "seedstage", "The quiet comeback of the $2M round", when, web=True),
         _email("Bright Basket", "brightbasket", "Welcome! Please confirm your email address", when),
-        _email("The Lab Notebook", "labnotebook", "Sleep, salt and a surprising protein", when),
+        _email("The Lab Notebook", "labnotebook", "Sleep, salt and a surprising protein", when, web=True),
         _email("Harbor Politics Brief", "harborbrief", "Port funding vote moves to Tuesday", when),
         _email("The Weekend Reader", "weekendreader", "Issue 212: the long way home", when),
-        _email("Daily Stoic Post", "stoicpost", "The obstacle is the way, again", when),
+        _email("Daily Stoic Post", "stoicpost", "The obstacle is the way, again", when, web=True),
     ]
     results: list[NewsletterSummary | str] = [
         # The Context Window, Monday
@@ -129,5 +139,5 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
 def write_preview(path: Path, when: datetime) -> Path:
     """Build the digest from sample data and write its HTML to `path`."""
     emails, results = sample_data(when)
-    path.write_text(build_digest(emails, results, when).html, encoding="utf-8")
+    path.write_text(build_digest(emails, results, when, PREVIEW_GMAIL_ADDRESS).html, encoding="utf-8")
     return path

@@ -207,6 +207,15 @@ class SummarizeTests(unittest.TestCase):
         self.assertIn("Personal Growth: habits, personal productivity, self-improvement", prompt)
         self.assertIn("Business & GTM: startups, sales, marketing, finance, revenue operations", prompt)
 
+    def test_prompt_forbids_promo_stories_and_skips_empty_emails(self) -> None:
+        prompt = " ".join(SYSTEM_PROMPT.split())
+        for phrase in ("sponsored content", "ads", "self-promotion", "courses", "books", "product trials",
+                       "explore the archive", "subscribe", "upgrade", "refer a friend", "social links",
+                       "lists of tools the newsletter is selling"):
+            self.assertIn(phrase, prompt)
+        self.assertIn("only real editorial content becomes a story", prompt.lower())
+        self.assertIn('set "skip" to true', prompt)
+
     def test_empty_text_is_an_error(self) -> None:
         with self.assertRaises(SummarizeError):
             summarize("   ", [GOOD], client=FakeClient(reply()))

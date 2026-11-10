@@ -15,7 +15,7 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
 from config import IMAP_HOST, LOOKBACK_HOURS, NEWSLETTER_LABEL, Credentials
-from links import Link, extract_links
+from links import Link, extract_links, find_web_version
 
 # IMAP wants dates like 09-Nov-2026 with English month names. We spell them
 # out ourselves because strftime("%b") changes with the computer's language.
@@ -37,6 +37,8 @@ class Newsletter:
     body: str                    # plain text; used by the summarizer
     links: list[Link]            # every link with its text (filtered later, before Gemini)
     unsubscribe: str | None      # the List-Unsubscribe header, if present
+    web_url: str | None = None   # the email's "view in browser" page, if it has one
+    message_id: str | None = None  # the Message-ID header; lets us build a Gmail search link
 
 
 class _TextExtractor(HTMLParser):
@@ -80,13 +82,17 @@ def parse_message(raw: bytes) -> Newsletter:
         date = datetime.now(timezone.utc)  # missing or broken Date header
 
     unsubscribe = msg["List-Unsubscribe"]
+    message_id = str(msg["Message-ID"] or "").strip()
+    links = extract_links(plain, html)
     return Newsletter(
         sender=str(msg["From"] or "(unknown sender)"),
         subject=str(msg["Subject"] or "(no subject)"),
         date=date,
         body=body,
-        links=extract_links(plain, html),
+        links=links,
         unsubscribe=str(unsubscribe) if unsubscribe else None,
+        web_url=find_web_version(links),
+        message_id=message_id or None,
     )
 
 
