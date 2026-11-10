@@ -16,9 +16,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 import main  # noqa: E402
 from config import (  # noqa: E402
-    CATEGORIES, MAX_STORIES, MAX_TITLE_WORDS, MAX_WORDS, ConfigError, Credentials, load_recipient,
+    CATEGORIES, REDIRECT_BASE, MAX_STORIES, MAX_TITLE_WORDS, MAX_WORDS, ConfigError, Credentials, load_recipient,
 )
-from digest import _organize, build_digest, gmail_fallback_url, gmail_thread_url  # noqa: E402
+from digest import _organize, build_digest, redirect_message_url, redirect_thread_url  # noqa: E402
 from fetch import Newsletter  # noqa: E402
 from preview import PREVIEW_GMAIL_ADDRESS, sample_data, write_preview  # noqa: E402
 from send import SendError, build_message, send_digest  # noqa: E402
@@ -160,7 +160,7 @@ class DigestTests(unittest.TestCase):
 
 
 class NewsletterLinkTests(unittest.TestCase):
-    ADDRESS = "me@example.com"
+    ADDRESS = "me@gmail.com"
     LINK_STYLE = "font-size:13px;color:#6b7280;text-decoration:underline;"
 
     def digest_for(self, thread_id: str | None, message_id: str | None, address: str | None = ADDRESS,
@@ -171,10 +171,12 @@ class NewsletterLinkTests(unittest.TestCase):
 
     def test_name_links_to_gmail_thread(self) -> None:
         digest = self.digest_for("18abc", "<abc@mail.example.com>")
-        self.assertIn('(<a href="https://mail.google.com/mail/?authuser=me@example.com#all/18abc" '
-                      f'style="{self.LINK_STYLE}">Fake Weekly</a>)', digest.html)
-        self.assertNotIn("rfc822msgid", digest.html)  # thread link wins over the fallback
-        self.assertIn("Newsletter: https://mail.google.com/mail/?authuser=me@example.com#all/18abc", digest.text)
+        link = f"{REDIRECT_BASE}#t=18abc&a=me@gmail.com"
+        escaped = link.replace("&", "&amp;")  # inside an HTML attribute, & is written &amp;
+        self.assertIn(f'(<a href="{escaped}" style="{self.LINK_STYLE}">Fake Weekly</a>)', digest.html)
+        self.assertNotIn("#m=", digest.html)  # thread link wins over the fallback
+        self.assertNotIn("mail.google.com", digest.html)  # links go through the redirect page
+        self.assertIn(f"Newsletter: {link}", digest.text)
 
     def test_web_version_is_not_used_in_the_digest(self) -> None:
         digest = self.digest_for("18abc", None, web_url="https://example.com/web")
@@ -183,8 +185,9 @@ class NewsletterLinkTests(unittest.TestCase):
 
     def test_name_falls_back_to_message_id_search(self) -> None:
         digest = self.digest_for(None, "<abc+1=2@mail.example.com>")
-        self.assertIn("https://mail.google.com/mail/?authuser=me@example.com#search/rfc822msgid%3A"
-                      "abc%2B1%3D2%40mail.example.com", digest.html)
+        link = f"{REDIRECT_BASE}#m=abc%2B1%3D2%40mail.example.com&a=me@gmail.com"
+        self.assertIn(link.replace("&", "&amp;"), digest.html)
+        self.assertIn(f"Newsletter: {link}", digest.text)
         self.assertEqual(digest.html.count("<a "), 2)  # headline + newsletter name
 
     def test_name_link_is_underlined_medium_gray_same_size(self) -> None:
@@ -204,27 +207,57 @@ class NewsletterLinkTests(unittest.TestCase):
     def test_non_hex_thread_id_is_ignored(self) -> None:
         digest = self.digest_for('zz"><script>', None)
         self.assertNotIn("<script>", digest.html)
-        self.assertNotIn("#all/", digest.html)
+        self.assertNotIn("#t=", digest.html)
+
+    def test_builders_reject_bad_thread_ids(self) -> None:
+        bad = [None, "", "   ", "xyz", "18abc/../x", "18abc&a=evil@gmail.com", "18 abc", "18\nabc", "0" * 33, 'a"b']
+        for thread_id in bad:
+            self.assertIsNone(redirect_thread_url("me@gmail.com", thread_id), repr(thread_id))
+        self.assertIsNotNone(redirect_thread_url("me@gmail.com", "0" * 32))  # 32 is the maximum
+
+    def test_builders_reject_bad_addresses(self) -> None:
+        bad = [None, "", "me@example.com", "me@gmail.com.evil.com", "me@evilgmail.com", "me@gmail.co",
+               "me@googlemail.com", "a b@gmail.com", 'a"b@gmail.com', "<me@gmail.com>", "me@gmail.com&x=1",
+               "me@gmail.com#frag", "evil.com/me@gmail.com", "a@b@gmail.com", "@gmail.com"]
+        for address in bad:
+            self.assertIsNone(redirect_thread_url(address, "18abc"), repr(address))
+            self.assertIsNone(redirect_message_url(address, "<id@host>"), repr(address))
+
+    def test_message_url_rejects_bad_ids(self) -> None:
+        for message_id in [None, "", "<>", "a b@host", "a\nb@host", "x" * 513]:
+            self.assertIsNone(redirect_message_url("me@gmail.com", message_id), repr(message_id))
 
     def test_everything_is_escaped(self) -> None:
-        url = gmail_fallback_url('a"b@example.com', '<x"y>')
-        self.assertNotIn('"', url)
-        self.assertNotIn("<", url)
-        self.assertNotIn('"', gmail_thread_url('a"b@example.com', "18abc"))
+        url = redirect_message_url("me@gmail.com", '<x"y&a=evil@gmail.com#z>')
+        self.assertEqual(url, f"{REDIRECT_BASE}#m=x%22y%26a%3Devil%40gmail.com%23z&a=me@gmail.com")
+        for char in '"<> ':
+            self.assertNotIn(char, url)
+
+    def test_plus_in_address_is_encoded(self) -> None:
+        self.assertEqual(redirect_thread_url("me+news@gmail.com", "18abc"),
+                         f"{REDIRECT_BASE}#t=18abc&a=me%2Bnews@gmail.com")
+
+    def test_redirect_base_is_the_public_pages_url(self) -> None:
+        self.assertEqual(REDIRECT_BASE, "https://matt-carlson801.github.io/newsletter-triage/open.html")
 
     def test_thread_url_format(self) -> None:
-        self.assertEqual(gmail_thread_url("me@example.com", "18AbC"),
-                         "https://mail.google.com/mail/?authuser=me@example.com#all/18abc")
-        self.assertIsNone(gmail_thread_url("me@example.com", None))
-        self.assertIsNone(gmail_thread_url(None, "18abc"))
+        self.assertEqual(redirect_thread_url("me@gmail.com", "18AbC"), f"{REDIRECT_BASE}#t=18abc&a=me@gmail.com")
+        self.assertIsNone(redirect_thread_url("me@gmail.com", None))
+        self.assertIsNone(redirect_thread_url(None, "18abc"))
 
-    def test_fallback_url_format(self) -> None:
-        self.assertEqual(
-            gmail_fallback_url("me@example.com", "<id@host>"),
-            "https://mail.google.com/mail/?authuser=me@example.com#search/rfc822msgid%3Aid%40host",
-        )
-        self.assertIsNone(gmail_fallback_url("me@example.com", None))
-        self.assertIsNone(gmail_fallback_url(None, "<id@host>"))
+    def test_message_url_format(self) -> None:
+        self.assertEqual(redirect_message_url("me@gmail.com", "<id@host>"),
+                         f"{REDIRECT_BASE}#m=id%40host&a=me@gmail.com")
+        self.assertIsNone(redirect_message_url("me@gmail.com", None))
+        self.assertIsNone(redirect_message_url(None, "<id@host>"))
+
+    def test_redirect_page_is_self_contained_and_gmail_only(self) -> None:
+        page = (Path(__file__).resolve().parent.parent / "docs" / "open.html").read_text(encoding="utf-8")
+        self.assertIn('<meta name="robots" content="noindex">', page)
+        self.assertNotRegex(page, r"(src|href)=\"https?://")  # no external resources
+        self.assertNotIn("<script src", page)
+        self.assertEqual(page.count("window.location.replace("), 1)
+        self.assertIn("https://mail.google.com/mail/?authuser=", page)
 
     def test_preview_mixes_thread_links_and_fallbacks(self) -> None:
         emails, _ = sample_data(WHEN)
@@ -232,13 +265,15 @@ class NewsletterLinkTests(unittest.TestCase):
         self.assertTrue(any(not item.thread_id for item in emails))
         with tempfile.TemporaryDirectory() as folder:
             page = write_preview(Path(folder) / "preview.html", WHEN).read_text(encoding="utf-8")
-        self.assertIn(f"mail.google.com/mail/?authuser={PREVIEW_GMAIL_ADDRESS}#all/", page)
-        self.assertIn(f"mail.google.com/mail/?authuser={PREVIEW_GMAIL_ADDRESS}#search/rfc822msgid%3A", page)
+        self.assertIn(f"{REDIRECT_BASE}#t=", page)
+        self.assertIn(f"{REDIRECT_BASE}#m=", page)
+        self.assertIn(f"&amp;a={PREVIEW_GMAIL_ADDRESS}", page)
+        self.assertNotIn("mail.google.com", page)
         self.assertNotIn("web-version", page)
 
     def test_main_passes_gmail_address_to_digest(self) -> None:
         with mock.patch("main.build_digest", wraps=build_digest) as builder, \
-             mock.patch("main.load_credentials", return_value=mock.Mock(address="me@example.com")), \
+             mock.patch("main.load_credentials", return_value=mock.Mock(address="me@gmail.com")), \
              mock.patch("main.load_recipient", return_value="to@example.com"), \
              mock.patch("main.connect"), \
              mock.patch("main.fetch_newsletters", return_value=[make_newsletter()]), \
@@ -246,7 +281,7 @@ class NewsletterLinkTests(unittest.TestCase):
              mock.patch("main.append_to_log", return_value=0), \
              mock.patch("main.send_digest"):
             self.assertEqual(main.main([]), 0)
-        self.assertEqual(builder.call_args.args[3], "me@example.com")
+        self.assertEqual(builder.call_args.args[3], "me@gmail.com")
 
 
 class SkipAndPreviewTests(unittest.TestCase):

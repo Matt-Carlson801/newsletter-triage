@@ -17,7 +17,7 @@ from datetime import datetime
 from email.utils import parseaddr
 from urllib.parse import quote
 
-from config import CATEGORIES
+from config import CATEGORIES, REDIRECT_BASE
 from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
@@ -62,42 +62,63 @@ def _safe_url(url: str | None) -> str | None:
     return None
 
 
-def gmail_fallback_url(address: str | None, message_id: str | None) -> str | None:
-    """Build a Gmail search link that opens one email by its Message-ID header.
+# A Gmail thread id: 1 to 32 lowercase hex characters.
+_THREAD_ID_RE = re.compile(r"[0-9a-f]{1,32}")
+# A plain gmail.com address: no spaces, quotes or angle brackets.
+_GMAIL_ADDRESS_RE = re.compile(r"[a-z0-9][a-z0-9._+-]{0,63}@gmail\.com", re.IGNORECASE)
+_MAX_MESSAGE_ID = 512
 
-    Gmail's search understands rfc822msgid:<id>. The id is URL-encoded so
-    characters like < > + = & # cannot break the link. Returns None if either
-    piece is missing.
+
+def _clean_address(address: str | None) -> str | None:
+    """Return the address if it is a plain gmail.com address, otherwise None."""
+    address = (address or "").strip()
+    return address if _GMAIL_ADDRESS_RE.fullmatch(address) else None
+
+
+def _address_part(address: str) -> str:
+    """URL-encode the address for the fragment. '+' becomes %2B so it survives."""
+    return quote(address, safe="@")
+
+
+def redirect_message_url(address: str | None, message_id: str | None) -> str | None:
+    """Build a redirect-page link that finds one email by its Message-ID header.
+
+    The redirect page (docs/open.html) turns this into a Gmail search for
+    rfc822msgid:<id>. The id is URL-encoded so characters like < > + = & #
+    cannot break the link. Returns None if the address is not a plain
+    gmail.com address, or the id is missing, too long, or contains whitespace.
     """
+    address = _clean_address(address)
     message_id = (message_id or "").strip().strip("<>").strip()
-    if not address or not message_id:
+    if not address or not message_id or len(message_id) > _MAX_MESSAGE_ID:
         return None
-    return (
-        f"https://mail.google.com/mail/?authuser={quote(address.strip(), safe='@')}"
-        f"#search/rfc822msgid%3A{quote(message_id, safe='')}"
-    )
+    if re.search(r"[\s\x00-\x1f\x7f]", message_id):
+        return None
+    return f"{REDIRECT_BASE}#m={quote(message_id, safe='')}&a={_address_part(address)}"
 
 
-def gmail_thread_url(address: str | None, thread_id: str | None) -> str | None:
-    """Build a link that opens the email's conversation directly in Gmail.
+def redirect_thread_url(address: str | None, thread_id: str | None) -> str | None:
+    """Build a redirect-page link that opens the email's conversation in Gmail.
 
-    `thread_id` is the hex form of Gmail's X-GM-THRID. Returns None if either
-    piece is missing or the id is not plain hex.
+    `thread_id` is the hex form of Gmail's X-GM-THRID. Returns None if the
+    address is not a plain gmail.com address or the id is not 1 to 32 hex
+    characters.
     """
+    address = _clean_address(address)
     thread_id = (thread_id or "").strip().lower()
-    if not address or not re.fullmatch(r"[0-9a-f]+", thread_id):
+    if not address or not _THREAD_ID_RE.fullmatch(thread_id):
         return None
-    return f"https://mail.google.com/mail/?authuser={quote(address.strip(), safe='@')}#all/{thread_id}"
+    return f"{REDIRECT_BASE}#t={thread_id}&a={_address_part(address)}"
 
 
 def _source_url(item: Newsletter, gmail_address: str | None) -> str | None:
-    """The link for the newsletter name: the Gmail thread, else a Message-ID search.
+    """The link for the newsletter name: the redirect page with a thread id, else a Message-ID.
 
     (item.web_url is still collected by fetch.py but no longer used here.)
     """
     return _safe_url(
-        gmail_thread_url(gmail_address, item.thread_id)
-        or gmail_fallback_url(gmail_address, item.message_id)
+        redirect_thread_url(gmail_address, item.thread_id)
+        or redirect_message_url(gmail_address, item.message_id)
     )
 
 

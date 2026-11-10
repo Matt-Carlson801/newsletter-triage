@@ -6,7 +6,7 @@ Everything here is invented: the newsletter names, the stories and the links
 one sender mails twice, one email is a signup confirmation (skipped), and one
 summary failed. Stories cover seven topics, and several topics (AI & Tech,
 Work & Productivity, Business & GTM) are covered by more than one newsletter.
-Five emails have a (fake) Gmail thread id; the rest use the Message-ID fallback link.
+Five emails have a (fake) Gmail thread id; the rest use the Message-ID fallback link (all via the redirect page).
 "Other" is left empty on purpose, to show that empty topics are not shown.
 """
 
@@ -19,7 +19,7 @@ from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
 
-PREVIEW_GMAIL_ADDRESS = "reader@example.com"  # fake; used for the Gmail links
+PREVIEW_GMAIL_ADDRESS = "sample.reader@gmail.com"  # fake; used for the Gmail links
 
 
 def _email(name: str, domain: str, subject: str, when: datetime, thread: bool = False) -> Newsletter:

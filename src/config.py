@@ -53,6 +53,10 @@ CATEGORIES = list(CATEGORY_DEFINITIONS)
 # not a newsletter: order confirmations, welcome messages, verification codes,
 # sign-in links. The digest leaves those out and only mentions how many there were.
 
+# Newsletter-name links in the digest go through this public page (docs/open.html,
+# served by GitHub Pages), which forwards you on to Gmail. Not a secret.
+REDIRECT_BASE = "https://matt-carlson801.github.io/newsletter-triage/open.html"
+
 # Path to the CSV log. __file__ is this file's location, so .parent.parent
 # walks up from src/ to the project root regardless of where you run from.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

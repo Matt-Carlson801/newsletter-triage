@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="referrer" content="no-referrer">
+<title>Opening in Gmail</title>
+<style>
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+         color: #374151; background: #ffffff; max-width: 480px; margin: 20vh auto 0; padding: 0 16px; }
+  a { color: #1a56db; }
+  p { line-height: 1.5; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<!--
+  Redirect helper for the newsletter digest links.
+  Link formats (everything after # never leaves the browser):
+    open.html#t=<hex thread id>&a=<name@gmail.com>
+    open.html#m=<url-encoded Message-ID>&a=<name@gmail.com>
+  The only place this page will ever send you is https://mail.google.com/.
+-->
+<p id="status">Opening in Gmail&hellip;</p>
+<p id="fallback" hidden>Not redirected? <a id="link" href="#">Open it in Gmail</a>.</p>
+<p id="error" hidden></p>
+<script>
+(function () {
+  "use strict";
+
+  // Same rules as the Python link builder in src/digest.py.
+  var THREAD_RE = /^[0-9a-f]{1,32}$/;
+  var GMAIL_RE = /^[a-z0-9][a-z0-9._+-]{0,63}@gmail\.com$/i;
+  var MAX_MESSAGE_ID = 512;
+
+  function show(id) { document.getElementById(id).hidden = false; }
+
+  function fail(message) {
+    document.getElementById("status").hidden = true;
+    var el = document.getElementById("error");
+    el.textContent = message;
+    show("error");
+  }
+
+  // Reads "#key=value&key=value". Splits by hand instead of URLSearchParams so
+  // that a literal "+" is never turned into a space.
+  function parseFragment(hash) {
+    var out = {};
+    hash.replace(/^#/, "").split("&").forEach(function (pair) {
+      var i = pair.indexOf("=");
+      if (i < 1) { return; }
+      try {
+        out[pair.slice(0, i)] = decodeURIComponent(pair.slice(i + 1));
+      } catch (e) { /* malformed escape: leave the key unset */ }
+    });
+    return out;
+  }
+
+  function buildTarget(p) {
+    var address = p.a;
+    if (typeof address !== "string" || !GMAIL_RE.test(address)) { return null; }
+    var base = "https://mail.google.com/mail/?authuser=" + encodeURIComponent(address);
+
+    if (p.t !== undefined) {
+      if (!THREAD_RE.test(p.t)) { return null; }
+      return base + "#all/" + p.t;
+    }
+    if (p.m !== undefined) {
+      var m = p.m;
+      // Reject empty, oversized, or anything with whitespace/control characters.
+      if (m.length === 0 || m.length > MAX_MESSAGE_ID || /[\s\u0000-\u001f\u007f]/.test(m)) { return null; }
+      return base + "#search/rfc822msgid%3A" + encodeURIComponent(m);
+    }
+    return null;
+  }
+
+  var target = buildTarget(parseFragment(window.location.hash));
+  // Final guard: whatever was built must start with the Gmail origin.
+  if (!target || target.indexOf("https://mail.google.com/mail/?authuser=") !== 0) {
+    fail("This link is not valid, so nothing was opened.");
+    return;
+  }
+
+  var link = document.getElementById("link");
+  link.href = target;
+  show("fallback");
+  window.location.replace(target);
+})();
+</script>
+</body>
+</html>
