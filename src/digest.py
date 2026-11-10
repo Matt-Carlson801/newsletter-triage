@@ -73,7 +73,7 @@ def gmail_fallback_url(address: str | None, message_id: str | None) -> str | Non
     if not address or not message_id:
         return None
     return (
-        f"https://mail.google.com/mail/u/{quote(address.strip(), safe='@')}/"
+        f"https://mail.google.com/mail/?authuser={quote(address.strip(), safe='@')}"
         f"#search/rfc822msgid%3A{quote(message_id, safe='')}"
     )
 
@@ -87,7 +87,7 @@ def gmail_thread_url(address: str | None, thread_id: str | None) -> str | None:
     thread_id = (thread_id or "").strip().lower()
     if not address or not re.fullmatch(r"[0-9a-f]+", thread_id):
         return None
-    return f"https://mail.google.com/mail/u/{quote(address.strip(), safe='@')}/#all/{thread_id}"
+    return f"https://mail.google.com/mail/?authuser={quote(address.strip(), safe='@')}#all/{thread_id}"
 
 
 def _source_url(item: Newsletter, gmail_address: str | None) -> str | None:

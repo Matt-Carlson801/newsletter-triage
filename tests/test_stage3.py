@@ -171,10 +171,10 @@ class NewsletterLinkTests(unittest.TestCase):
 
     def test_name_links_to_gmail_thread(self) -> None:
         digest = self.digest_for("18abc", "<abc@mail.example.com>")
-        self.assertIn('(<a href="https://mail.google.com/mail/u/me@example.com/#all/18abc" '
+        self.assertIn('(<a href="https://mail.google.com/mail/?authuser=me@example.com#all/18abc" '
                       f'style="{self.LINK_STYLE}">Fake Weekly</a>)', digest.html)
         self.assertNotIn("rfc822msgid", digest.html)  # thread link wins over the fallback
-        self.assertIn("Newsletter: https://mail.google.com/mail/u/me@example.com/#all/18abc", digest.text)
+        self.assertIn("Newsletter: https://mail.google.com/mail/?authuser=me@example.com#all/18abc", digest.text)
 
     def test_web_version_is_not_used_in_the_digest(self) -> None:
         digest = self.digest_for("18abc", None, web_url="https://example.com/web")
@@ -183,7 +183,7 @@ class NewsletterLinkTests(unittest.TestCase):
 
     def test_name_falls_back_to_message_id_search(self) -> None:
         digest = self.digest_for(None, "<abc+1=2@mail.example.com>")
-        self.assertIn("https://mail.google.com/mail/u/me@example.com/#search/rfc822msgid%3A"
+        self.assertIn("https://mail.google.com/mail/?authuser=me@example.com#search/rfc822msgid%3A"
                       "abc%2B1%3D2%40mail.example.com", digest.html)
         self.assertEqual(digest.html.count("<a "), 2)  # headline + newsletter name
 
@@ -214,14 +214,14 @@ class NewsletterLinkTests(unittest.TestCase):
 
     def test_thread_url_format(self) -> None:
         self.assertEqual(gmail_thread_url("me@example.com", "18AbC"),
-                         "https://mail.google.com/mail/u/me@example.com/#all/18abc")
+                         "https://mail.google.com/mail/?authuser=me@example.com#all/18abc")
         self.assertIsNone(gmail_thread_url("me@example.com", None))
         self.assertIsNone(gmail_thread_url(None, "18abc"))
 
     def test_fallback_url_format(self) -> None:
         self.assertEqual(
             gmail_fallback_url("me@example.com", "<id@host>"),
-            "https://mail.google.com/mail/u/me@example.com/#search/rfc822msgid%3Aid%40host",
+            "https://mail.google.com/mail/?authuser=me@example.com#search/rfc822msgid%3Aid%40host",
         )
         self.assertIsNone(gmail_fallback_url("me@example.com", None))
         self.assertIsNone(gmail_fallback_url(None, "<id@host>"))
@@ -232,8 +232,8 @@ class NewsletterLinkTests(unittest.TestCase):
         self.assertTrue(any(not item.thread_id for item in emails))
         with tempfile.TemporaryDirectory() as folder:
             page = write_preview(Path(folder) / "preview.html", WHEN).read_text(encoding="utf-8")
-        self.assertIn(f"mail.google.com/mail/u/{PREVIEW_GMAIL_ADDRESS}/#all/", page)
-        self.assertIn(f"mail.google.com/mail/u/{PREVIEW_GMAIL_ADDRESS}/#search/rfc822msgid%3A", page)
+        self.assertIn(f"mail.google.com/mail/?authuser={PREVIEW_GMAIL_ADDRESS}#all/", page)
+        self.assertIn(f"mail.google.com/mail/?authuser={PREVIEW_GMAIL_ADDRESS}#search/rfc822msgid%3A", page)
         self.assertNotIn("web-version", page)
 
     def test_main_passes_gmail_address_to_digest(self) -> None:
