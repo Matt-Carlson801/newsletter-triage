@@ -7,7 +7,6 @@ ships with a client for it (imaplib), and a parser for email messages
 
 import email
 import imaplib
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from email import policy
@@ -16,14 +15,12 @@ from email.utils import parsedate_to_datetime
 from html.parser import HTMLParser
 
 from config import IMAP_HOST, LOOKBACK_HOURS, NEWSLETTER_LABEL, Credentials
+from links import Link, extract_links
 
 # IMAP wants dates like 09-Nov-2026 with English month names. We spell them
 # out ourselves because strftime("%b") changes with the computer's language.
 MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
           "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-
-# A very simple pattern for "something that looks like a web link".
-LINK_PATTERN = re.compile(r"https?://[^\s<>\"')\]]+")
 
 
 class FetchError(Exception):
@@ -37,8 +34,8 @@ class Newsletter:
     sender: str
     subject: str
     date: datetime
-    body: str                    # plain text; used by the summarizer in Stage 2
-    links: list[str]
+    body: str                    # plain text; used by the summarizer
+    links: list[Link]            # every link with its text (filtered later, before Gemini)
     unsubscribe: str | None      # the List-Unsubscribe header, if present
 
 
@@ -59,20 +56,6 @@ def html_to_text(html: str) -> str:
     extractor = _TextExtractor()
     extractor.feed(html)
     return " ".join(" ".join(extractor.parts).split())
-
-
-def extract_links(*texts: str) -> list[str]:
-    """Find every http(s) link in the given texts, without duplicates.
-
-    *texts means "accept any number of strings". We search both the plain
-    and HTML versions of an email because newsletters often keep their links
-    only in the HTML.
-    """
-    seen: dict[str, None] = {}  # a dict remembers insertion order; we use it as an ordered set
-    for text in texts:
-        for url in LINK_PATTERN.findall(text):
-            seen[url.rstrip(".,;")] = None
-    return list(seen)
 
 
 def parse_message(raw: bytes) -> Newsletter:

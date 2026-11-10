@@ -16,6 +16,29 @@ IMAP_HOST = "imap.gmail.com"      # Gmail's incoming-mail server
 NEWSLETTER_LABEL = "Newsletters"  # the Gmail label your filter applies
 LOOKBACK_HOURS = 24               # only look at emails newer than this
 
+# Gemini settings. The model name lives here so swapping it is a one-line change.
+GEMINI_MODEL = "gemini-3.5-flash-lite"  # free-tier "Flash-Lite" model (checked Nov 2026)
+MAX_INPUT_CHARS = 30_000          # newsletters longer than this are cut before sending
+MAX_STORIES = 5                   # most stories we keep per newsletter
+MAX_LINKS_SENT = 120              # most candidate links sent to Gemini per newsletter
+
+# Retry settings. On a temporary Gemini error we wait, then try again.
+RETRY_DELAYS = (2, 4, 8)          # seconds to wait before retry 1, 2 and 3
+RETRYABLE_CODES = (429, 503)      # 429 = rate limit, 503 = Gemini overloaded
+PAUSE_BETWEEN_NEWSLETTERS = 1     # seconds; keeps us under the free tier's per-minute limit
+
+# Gemini must pick exactly one of these for each newsletter.
+CATEGORIES = [
+    "AI & Tech",
+    "Business & Finance",
+    "Marketing & Sales",
+    "Startups & Product",
+    "Science & Health",
+    "News & Politics",
+    "Culture & Lifestyle",
+    "Other",
+]
+
 # Path to the CSV log. __file__ is this file's location, so .parent.parent
 # walks up from src/ to the project root regardless of where you run from.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent

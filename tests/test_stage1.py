@@ -12,7 +12,8 @@ from pathlib import Path
 # Let the tests import the modules that live in src/.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-from fetch import extract_links, parse_message  # noqa: E402
+from fetch import parse_message  # noqa: E402
+from links import Link, extract_links  # noqa: E402
 from main import append_to_log  # noqa: E402
 
 FAKE_EMAIL = b"""From: Example Weekly <hello@example.com>
@@ -36,7 +37,8 @@ class ParseMessageTests(unittest.TestCase):
 
     def test_links_are_cleaned_and_deduplicated(self) -> None:
         item = parse_message(FAKE_EMAIL)
-        self.assertEqual(item.links, ["https://example.com/story", "https://example.com/other"])
+        self.assertEqual([link.url for link in item.links],
+                         ["https://example.com/story", "https://example.com/other"])
 
     def test_missing_unsubscribe_header_is_none(self) -> None:
         raw = FAKE_EMAIL.replace(b"List-Unsubscribe: <https://example.com/unsub>\n", b"")
@@ -44,7 +46,16 @@ class ParseMessageTests(unittest.TestCase):
 
     def test_extract_links_searches_all_texts(self) -> None:
         links = extract_links("a https://a.com", '<a href="https://b.com">x</a>')
-        self.assertEqual(links, ["https://a.com", "https://b.com"])
+        self.assertEqual([link.url for link in links], ["https://b.com", "https://a.com"])
+
+    def test_link_text_is_kept_and_images_are_ignored(self) -> None:
+        html = ('<a href="https://a.com/p">Big  <b>news</b></a>'
+                '<img src="https://a.com/pixel.gif"><a href="mailto:x@y.com">mail</a>')
+        self.assertEqual(extract_links("", html), [Link("Big news", "https://a.com/p")])
+
+    def test_text_is_preferred_when_url_appears_twice(self) -> None:
+        links = extract_links("see https://a.com/p", '<a href="https://a.com/p">Story</a>')
+        self.assertEqual(links, [Link("Story", "https://a.com/p")])
 
 
 class LogTests(unittest.TestCase):
