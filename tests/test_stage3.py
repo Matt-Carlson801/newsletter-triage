@@ -346,9 +346,11 @@ class SkipAndPreviewTests(unittest.TestCase):
         self.assertIn("7 newsletters", page)
         self.assertIn("1 non-newsletter email skipped.", page)
         self.assertIn("Could not summarize", page)
-        self.assertIn("Business &amp; GTM (7)", page)
+        # Three stories run by several newsletters are merged into the top section.
+        self.assertIn("In multiple newsletters today (3)", page)
+        self.assertIn("Business &amp; GTM (6)", page)  # the rate-cuts story moved to the merged section
         self.assertNotIn("Other (", page)  # empty topics are not shown
-        self.assertEqual(page.count("<h2"), 8)  # 7 topics + the failure section
+        self.assertEqual(page.count("<h2"), 9)  # merged section + 7 topics + the failure section
 
     def test_preview_flag_never_loads_credentials_or_sends(self) -> None:
         with tempfile.TemporaryDirectory() as folder, \

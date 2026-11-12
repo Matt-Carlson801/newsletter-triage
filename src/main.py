@@ -3,7 +3,8 @@
 Stage 1: read the last 24 hours of newsletters and log sender + date to a CSV.
 Stage 2: one Gemini call per newsletter gives up to five one-sentence
 stories, each with its own topic category and best link.
-Stage 3: build one digest email and send it to DIGEST_TO.
+Stage 3: build one digest email and send it to DIGEST_TO. One extra Gemini
+call finds stories that several newsletters ran, and the digest merges them.
 The full body is never printed.
 
 Stage 4: in GitHub Actions (GITHUB_ACTIONS is set) the logs are public, so the
@@ -25,11 +26,11 @@ from pathlib import Path
 from config import (
     LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, PREVIEW_PATH, ConfigError, load_credentials, load_recipient, running_in_ci,
 )
-from digest import build_digest
+from digest import build_digest, story_headlines
 from fetch import FetchError, Newsletter, connect, fetch_newsletters
 from preview import write_preview
 from send import SendError, send_digest
-from summarize import NewsletterSummary, SummarizeError, summarize
+from summarize import NewsletterSummary, SummarizeError, find_duplicate_groups, summarize
 
 
 def summarize_all(newsletters: list[Newsletter]) -> list[NewsletterSummary | str]:
@@ -48,6 +49,27 @@ def summarize_all(newsletters: list[Newsletter]) -> list[NewsletterSummary | str
         except SummarizeError as problem:
             results.append(f"(summary unavailable: {problem})")
     return results
+
+
+def find_merge_groups(results: list[NewsletterSummary | str], client=None) -> list[list[int]]:
+    """Ask Gemini (one extra call) which stories are the same. Never raises.
+
+    Sends only headline + sentence text. On ANY failure (rate limit, bad reply,
+    no key...) it returns no groups, so the digest is simply sent unmerged.
+    It prints only a fixed message and counts: never story text and never the
+    error's own text, because that could include story text and CI logs are public.
+    """
+    headlines = story_headlines(results)
+    if len(headlines) < 2:
+        return []
+    time.sleep(PAUSE_BETWEEN_NEWSLETTERS)  # stay under the per-minute limit after the last summary
+    try:
+        groups = find_duplicate_groups(headlines, client)
+    except Exception:  # noqa: BLE001 - deliberate: any failure means "send unmerged"
+        print("Duplicate check unavailable; digest will not be merged.")
+        return []
+    print(f"Merged {sum(len(group) - 1 for group in groups)} duplicate stories.")
+    return groups
 
 
 def print_newsletters(newsletters: list[Newsletter], results: list[NewsletterSummary | str]) -> None:
@@ -159,11 +181,13 @@ def run(args: argparse.Namespace, ci: bool) -> int:
         added = append_to_log(newsletters, LOG_PATH)
         print(f"\nLogged {added} new row(s) to {LOG_PATH.name}.")
 
+    groups = find_merge_groups(results)
+
     if recipient is None:
         print("--no-send given: digest not sent.")
         return 0
 
-    digest = build_digest(newsletters, results, datetime.now().astimezone(), creds.address)
+    digest = build_digest(newsletters, results, datetime.now().astimezone(), creds.address, groups)
     try:
         send_digest(digest, creds, recipient)
     except SendError as problem:

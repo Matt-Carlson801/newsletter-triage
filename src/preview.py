@@ -8,13 +8,16 @@ summary failed. Stories cover seven topics, and several topics (AI & Tech,
 Work & Productivity, Business & GTM) are covered by more than one newsletter.
 Five emails have a (fake) Gmail thread id; the rest use the Message-ID fallback link (all via the redirect page).
 "Other" is left empty on purpose, to show that empty topics are not shown.
+
+Three stories are covered by several newsletters (see DUPLICATE_STORIES), so the
+preview shows the "In multiple newsletters today" section with 3, 2 and 2 sources.
 """
 
 import zlib
 from datetime import datetime
 from pathlib import Path
 
-from digest import build_digest
+from digest import build_digest, story_headlines
 from fetch import Newsletter
 from summarize import NewsletterSummary, Story
 
@@ -73,6 +76,8 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
                    "Lenders are now asking for larger down payments on half-empty downtown towers.", "office-loans"),
             _story("News & Politics", "Shipping costs ease for the first time",
                    "Container rates fell nine percent as new vessels entered service on Asia routes.", "shipping"),
+            _story("News & Politics", "Harbor budget vote delayed to Tuesday",
+                   "A dredging cost dispute pushed the council's port funding decision back by a few days.", "port-delay"),
         ]),
         # Pipeline Pulse
         NewsletterSummary([
@@ -84,6 +89,8 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
                    "Three revenue teams dropped overlapping trackers and saw clearer pipeline numbers.", "attribution"),
             _story("AI & Tech", "AI email drafters flood sales inboxes",
                    "Buyers report more generic outreach, and reply rates are falling for the lazy templates.", "ai-drafters"),
+            _story("AI & Tech", "A tiny open model lands on laptops",
+                   "Sales teams are testing a compact open model that runs locally, with no data leaving the device.", "tiny-model"),
         ]),
         # The Context Window, Thursday (same sender as the first email)
         NewsletterSummary([
@@ -102,6 +109,8 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
                    "Switching to a money-back guarantee lowered sign-ups but doubled paid conversion.", "free-trial"),
             _story("Personal Growth", "Customer calls beat surveys",
                    "Five short interviews surfaced the churn reason that a 400-person survey missed.", None),
+            _story("AI & Tech", "Small open model runs on a laptop",
+                   "Early-stage teams see a path to cheap local AI features without cloud bills.", "laptop-model"),
         ]),
         NewsletterSummary([], skip=True),  # the Bright Basket confirmation email
         # The Lab Notebook
@@ -121,6 +130,8 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
                    "The regional board voted to hold prices while it studies ridership recovery.", "transit-fares"),
             _story("News & Politics", "Mayor proposes a harbor cleanup fund",
                    "The plan would use a small fee on cruise ships, pending approval next month.", "harbor-cleanup"),
+            _story("Business & GTM", "Central banks hold rates again",
+                   "Officials said sticky prices leave no room to ease, which keeps city borrowing costs high.", "rates-hold"),
         ]),
         # The Weekend Reader: the summary failed
         "(summary unavailable: Gemini rate limit reached (free tier); gave up after 3 retries.)",
@@ -137,8 +148,24 @@ def sample_data(when: datetime) -> tuple[list[Newsletter], list[NewsletterSummar
     return emails, results
 
 
+# Headlines (from different newsletters) that are really the same story. The
+# preview stands in for Gemini's duplicate check by matching these exact titles.
+DUPLICATE_STORIES = [
+    ["Open model now runs on a laptop", "A tiny open model lands on laptops", "Small open model runs on a laptop"],
+    ["Rate cuts stall for a second quarter", "Central banks hold rates again"],
+    ["Port funding vote moves to Tuesday", "Harbor budget vote delayed to Tuesday"],
+]
+
+
+def sample_groups(results: list[NewsletterSummary | str]) -> list[list[int]]:
+    """Positions (in the digest's flat story order) of each fake duplicate group."""
+    titles = [line.split(":")[0] for line in story_headlines(results)]
+    return [[titles.index(title) for title in group] for group in DUPLICATE_STORIES]
+
+
 def write_preview(path: Path, when: datetime) -> Path:
     """Build the digest from sample data and write its HTML to `path`."""
     emails, results = sample_data(when)
-    path.write_text(build_digest(emails, results, when, PREVIEW_GMAIL_ADDRESS).html, encoding="utf-8")
+    digest = build_digest(emails, results, when, PREVIEW_GMAIL_ADDRESS, sample_groups(results))
+    path.write_text(digest.html, encoding="utf-8")
     return path

@@ -61,6 +61,7 @@ def run_main(argv: list[str], env: dict[str, str], **patches) -> tuple[int, str]
         "connect": mock.Mock(),
         "fetch_newsletters": mock.Mock(return_value=[fake_newsletter()]),
         "summarize_all": mock.Mock(return_value=[fake_summary()]),
+        "find_merge_groups": mock.Mock(return_value=[]),  # never call Gemini from these tests
         "append_to_log": mock.Mock(return_value=1),
         "send_digest": mock.Mock(),
     }
