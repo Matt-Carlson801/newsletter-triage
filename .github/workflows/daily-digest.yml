@@ -1,0 +1,60 @@
+# Runs the newsletter digest every morning, and on demand from the Actions tab.
+#
+# This repo is PUBLIC, so everything this workflow prints is public. src/main.py
+# knows this (it detects GITHUB_ACTIONS) and prints only counts and statuses.
+# Do not add steps that print env vars, list files, or upload artifacts.
+name: Daily digest
+
+on:
+  schedule:
+    # Cron is always in UTC. Fields: minute hour day-of-month month day-of-week.
+    # 11:30 UTC = 6:30 AM in winter (EST, UTC-5) and 7:30 AM in summer (EDT, UTC-4).
+    # GitHub cannot follow daylight saving, so the local time shifts by an hour
+    # twice a year. To get 6:30 AM in summer instead, change 11 to 10.
+    # GitHub may start scheduled runs a few minutes late when it is busy.
+    - cron: "30 11 * * *"
+  workflow_dispatch:  # adds the manual "Run workflow" button in the Actions tab
+
+# Least privilege: the automatic token can only read this repo's code.
+# (Everything else, like sending mail, uses your own secrets, not this token.)
+permissions:
+  contents: read
+
+# Only one run at a time. A second run waits instead of overlapping, so you
+# can never get a double digest. false = never cancel a run already in progress.
+concurrency:
+  group: daily-digest
+  cancel-in-progress: false
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15  # kills a stuck run; a normal run takes about a minute
+
+    steps:
+      # Third-party actions are pinned to an exact commit (the long hash), not
+      # a version tag, because tags can be moved. The comment shows the version.
+      - name: Check out the code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false  # do not leave the GitHub token on disk
+
+      - name: Set up Python 3.12 (with pip cache)
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0  # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip  # reuses downloaded packages; refreshes when requirements.txt changes
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build and send the digest
+        # Secrets are given ONLY to this step, as environment variables.
+        # GitHub hides their values in the logs.
+        env:
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          DIGEST_TO: ${{ secrets.DIGEST_TO }}
+          PYTHONUNBUFFERED: "1"  # print lines immediately, so logs stay in order
+        run: python src/main.py

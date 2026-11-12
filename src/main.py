@@ -6,6 +6,9 @@ stories, each with its own topic category and best link.
 Stage 3: build one digest email and send it to DIGEST_TO.
 The full body is never printed.
 
+Stage 4: in GitHub Actions (GITHUB_ACTIONS is set) the logs are public, so the
+script prints only counts and statuses and does not write the CSV log.
+
 Add --no-send to do everything except send the email.
 Add --preview to build the digest from fake sample data and write preview.html
 (no inbox, no Gemini, no sending).
@@ -13,12 +16,15 @@ Add --preview to build the digest from fake sample data and write preview.html
 
 import argparse
 import csv
+import logging
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
 
-from config import LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, PREVIEW_PATH, ConfigError, load_credentials, load_recipient
+from config import (
+    LOG_PATH, PAUSE_BETWEEN_NEWSLETTERS, PREVIEW_PATH, ConfigError, load_credentials, load_recipient, running_in_ci,
+)
 from digest import build_digest
 from fetch import FetchError, Newsletter, connect, fetch_newsletters
 from preview import write_preview
@@ -91,15 +97,34 @@ def append_to_log(newsletters: list[Newsletter], log_path: Path) -> int:
     return added
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run Stages 1 to 3 (or just the preview). Returns 0 on success, 1 on an expected problem."""
-    # argparse reads command-line options. Here there is just one: --no-send.
-    parser = argparse.ArgumentParser(description="Summarize today's newsletters and email a digest.")
-    parser.add_argument("--no-send", action="store_true", help="do everything except send the email")
-    parser.add_argument("--preview", action="store_true",
-                        help="write preview.html from fake sample data (no inbox, Gemini or sending)")
-    args = parser.parse_args(argv)
+def describe_problem(problem: Exception, ci: bool) -> str:
+    """Return text that is safe to print about an expected problem.
 
+    On your own computer you get the full message. In CI (public logs) the
+    message of most errors is hidden, because some of them can contain text
+    from the network or your mailbox, such as an address. You get only the
+    kind of error (for example "FetchError"). The one exception is
+    ConfigError, whose message is built only from fixed text and the NAMES of
+    missing settings (never their values), and it is the most useful message
+    when a secret was not set up.
+    """
+    if not ci or isinstance(problem, ConfigError):
+        return str(problem)
+    return f"{type(problem).__name__} (details hidden because CI logs are public)"
+
+
+def print_ci_summary(newsletters: list[Newsletter], results: list[NewsletterSummary | str]) -> None:
+    """Print ONLY counts for a CI run. No subjects, senders, summaries, links or addresses."""
+    failed = sum(1 for result in results if isinstance(result, str))
+    skipped = sum(1 for result in results if not isinstance(result, str) and result.skip)
+    stories = sum(len(result.stories) for result in results if not isinstance(result, str))
+    summarized = len(results) - failed - skipped
+    print(f"Summaries: {summarized} ok, {skipped} skipped (not newsletters), {failed} unavailable.")
+    print(f"Stories kept: {stories}.")
+
+
+def run(args: argparse.Namespace, ci: bool) -> int:
+    """The real work of the script. `ci` is True inside GitHub Actions."""
     if args.preview:  # handled first: needs no credentials and no network
         path = write_preview(PREVIEW_PATH, datetime.now().astimezone())
         print(f"Preview written to {path}")
@@ -114,7 +139,7 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             conn.logout()  # always close the connection, even after an error
     except (ConfigError, FetchError) as problem:
-        print(f"Error: {problem}")
+        print(f"Error: {describe_problem(problem, ci)}")
         return 1
 
     if not newsletters:
@@ -124,10 +149,15 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Found {len(newsletters)} newsletter(s) in the last 24 hours.")
     print("Summarizing with Gemini...")
     results = summarize_all(newsletters)
-    print_newsletters(newsletters, results)
 
-    added = append_to_log(newsletters, LOG_PATH)
-    print(f"\nLogged {added} new row(s) to {LOG_PATH.name}.")
+    if ci:
+        # Public logs: counts only, and the CSV log is not written (the CI
+        # machine is thrown away after every run, and nothing is uploaded).
+        print_ci_summary(newsletters, results)
+    else:
+        print_newsletters(newsletters, results)
+        added = append_to_log(newsletters, LOG_PATH)
+        print(f"\nLogged {added} new row(s) to {LOG_PATH.name}.")
 
     if recipient is None:
         print("--no-send given: digest not sent.")
@@ -137,10 +167,36 @@ def main(argv: list[str] | None = None) -> int:
     try:
         send_digest(digest, creds, recipient)
     except SendError as problem:
-        print(f"Error: {problem}")
+        print(f"Error: {describe_problem(problem, ci)}")
         return 1
     print("Digest sent.")
     return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Parse options, then run. Returns 0 on success, 1 on a problem."""
+    # argparse reads command-line options: --no-send and --preview.
+    parser = argparse.ArgumentParser(description="Summarize today's newsletters and email a digest.")
+    parser.add_argument("--no-send", action="store_true", help="do everything except send the email")
+    parser.add_argument("--preview", action="store_true",
+                        help="write preview.html from fake sample data (no inbox, Gemini or sending)")
+    args = parser.parse_args(argv)
+
+    ci = running_in_ci()
+    if not ci:
+        return run(args, ci)
+
+    # --- CI only: extra protection for public logs ---
+    # Libraries can log request details; turn all logging off.
+    logging.disable(logging.CRITICAL)
+    try:
+        return run(args, ci)
+    except Exception as problem:  # noqa: BLE001 - deliberate catch-all, see below
+        # An unexpected crash would normally print a traceback that ends with
+        # the exception's text, which might contain private data. Print only
+        # the error's type instead. (Run it locally to see the full details.)
+        print(f"Error: unexpected failure: {describe_problem(problem, ci)}")
+        return 1
 
 
 if __name__ == "__main__":

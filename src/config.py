@@ -65,6 +65,17 @@ LOG_PATH = PROJECT_ROOT / "data" / "newsletter_log.csv"
 PREVIEW_PATH =PROJECT_ROOT / "preview.html"
 
 
+def running_in_ci() -> bool:
+    """True when the script is running inside GitHub Actions.
+
+    GitHub sets the environment variable GITHUB_ACTIONS on every run. This
+    repo is public, so Actions logs are public too: when this returns True,
+    main.py prints only counts and statuses, never anything from your email.
+    Any non-empty value counts, so a mistake errs on the side of staying quiet.
+    """
+    return bool(os.environ.get("GITHUB_ACTIONS"))
+
+
 class ConfigError(Exception):
     """Raised when a required setting is missing."""
 
